@@ -4,9 +4,11 @@ import React from "react";
 import { Button } from "@/components/ui/Button";
 import { Star } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { useLanguageStore } from "@/stores/useLanguageStore";
 
 export const LimitReachedCard: React.FC = () => {
   const router = useRouter();
+  const { t } = useLanguageStore();
 
   const handleUpgrade = () => {
     router.push("/subscription");
@@ -19,17 +21,17 @@ export const LimitReachedCard: React.FC = () => {
           <Star className="w-6 h-6 fill-accent" />
         </div>
         <h3 className="text-[18px] font-bold text-text-primary mb-2 flex items-center justify-center gap-1.5">
-          Daily Limit Reached
+          {t.chat.limitTitle}
         </h3>
         <p className="text-[14px] text-text-muted mb-5 max-w-md mx-auto">
-          You&apos;ve used your free AI chats for today. Upgrade to Premium for unlimited access, or come back tomorrow.
+          {t.chat.limitBody}
         </p>
         <div className="flex items-center justify-center gap-3">
           <Button size="s" variant="secondary" onClick={() => router.push("/")}>
-            Maybe Tomorrow
+            {t.chat.limitLater}
           </Button>
           <Button size="s" onClick={handleUpgrade}>
-            Upgrade to Premium
+            {t.chat.limitUpgrade}
           </Button>
         </div>
       </div>

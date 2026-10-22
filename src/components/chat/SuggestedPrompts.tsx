@@ -1,6 +1,7 @@
 import React from "react";
 import { Sparkles } from "lucide-react";
 import { Profile } from "@/types";
+import { useLanguageStore } from "@/stores/useLanguageStore";
 
 interface SuggestedPromptsProps {
   profile: Profile | null;
@@ -8,26 +9,37 @@ interface SuggestedPromptsProps {
 }
 
 export const SuggestedPrompts: React.FC<SuggestedPromptsProps> = ({ profile, onSelect }) => {
-  // Generate context-aware prompts based on diseases
+  const { language } = useLanguageStore();
+  const bn = language === "bn";
+
+  // Generate context-aware prompts based on diseases. Each prompt is
+  // authored per language — Bangla prompts are natural Bangla, not
+  // machine-translated Banglish, so the AI receives a clean language cue.
   const getPrompts = () => {
-    const basePrompts = [
-      "Jor 2 din dhore, matha betha. Ki khabo?",
-      "বুকে জ্বালাপোড়া আর টক ঢেঁকুর কেন হচ্ছে?",
-      "My child has a dry cough at night — what can I do?",
-    ];
+    const basePrompts = bn
+      ? [
+          "জ্বর ২ দিন ধরে, সাথে মাথা ব্যথা — এখন কী করব?",
+          "বুকে জ্বালাপোড়া আর টক ঢেঁকুর কেন হচ্ছে?",
+          "শিশুর রাতে শুকনো কাশি — আমি কী করতে পারি?",
+        ]
+      : [
+          "Jor 2 din dhore, matha betha. Ki khabo?",
+          "বুকে জ্বালাপোড়া আর টক ঢেঁকুর কেন হচ্ছে?",
+          "My child has a dry cough at night — what can I do?",
+        ];
 
     if (!profile) return basePrompts;
 
     const customPrompts: string[] = [];
     const diseases = Array.isArray(profile.diseases) ? profile.diseases : [];
     if (diseases.includes("Diabetes")) {
-      customPrompts.push("What should I eat to manage my blood sugar today?");
+      customPrompts.push(bn ? "ডায়াবেটিস নিয়ন্ত্রণে রাখতে আজ কী খাওয়া উচিত?" : "What should I eat to manage my blood sugar today?");
     }
     if (diseases.includes("Asthma")) {
-      customPrompts.push("My asthma is acting up due to the dust. What should I do?");
+      customPrompts.push(bn ? "ধুলার কারণে হাঁপানি বেড়ে গেছে। কী করব?" : "My asthma is acting up due to the dust. What should I do?");
     }
     if (diseases.includes("High Blood Pressure")) {
-      customPrompts.push("Are there specific foods I should avoid for high blood pressure?");
+      customPrompts.push(bn ? "উচ্চ রক্তচাপের জন্য কোন খাবারগুলো খাওয়া থেকে বিরত থাকব?" : "Are there specific foods I should avoid for high blood pressure?");
     }
 
     // Mix custom with base, taking up to 3 total
@@ -38,7 +50,7 @@ export const SuggestedPrompts: React.FC<SuggestedPromptsProps> = ({ profile, onS
   const prompts = getPrompts();
 
   return (
-    <div className="flex flex-wrap gap-2 justify-center mt-6 max-w-[800px] mx-auto">
+    <div className="flex flex-wrap gap-2 justify-center mt-6 max-w-[800px] mx-auto" lang={bn ? "bn" : undefined}>
       {prompts.map((prompt, idx) => (
         <button
           key={idx}

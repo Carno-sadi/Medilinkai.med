@@ -8,6 +8,7 @@ import { DoseReminderCard } from "@/components/chat/DoseReminderCard";
 import { useAttachmentStore } from "@/stores/useAttachmentStore";
 import { extractMedicationDraft } from "@/lib/dose-parse";
 import { detectLang } from "@/lib/format";
+import { useLanguageStore } from "@/stores/useLanguageStore";
 
 interface ChatMessagesProps {
   messages: ChatMessage[];
@@ -32,6 +33,7 @@ export const ChatMessages: React.FC<ChatMessagesProps> = ({
   const [speakingId, setSpeakingId] = useState<string | null>(null);
   const attachments = useAttachmentStore((state) => state.attachments);
   const [dismissedSuggestions, setDismissedSuggestions] = useState<string[]>([]);
+  const { t, language } = useLanguageStore();
 
   const dismissSuggestion = useCallback((messageId: string) => {
     setDismissedSuggestions((prev) =>
@@ -123,7 +125,10 @@ export const ChatMessages: React.FC<ChatMessagesProps> = ({
   const formatTimestamp = (timestamp?: number) => {
     if (!timestamp) return "";
     const date = new Date(timestamp);
-    return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    return date.toLocaleTimeString(
+      language === "bn" ? "bn-BD" : [],
+      { hour: "numeric", minute: "2-digit" },
+    );
   };
 
   const renderContent = (msg: ChatMessage) => {
@@ -190,9 +195,9 @@ export const ChatMessages: React.FC<ChatMessagesProps> = ({
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
           </svg>
         </div>
-        <h2 className="text-[22px] font-heading font-bold text-text-primary mb-2">How can I help you today?</h2>
+        <h2 className="text-[22px] font-heading font-bold text-text-primary mb-2">{t.chat.emptyTitle}</h2>
         <p className="text-[15.5px] text-text-muted max-w-sm mx-auto leading-relaxed">
-          Describe your symptoms or ask a health-related question. I can also help you find medicines or doctors.
+          {t.chat.emptyBody}
         </p>
       </div>
     );
@@ -240,7 +245,7 @@ export const ChatMessages: React.FC<ChatMessagesProps> = ({
                     <div className="flex flex-col">
                       <div className="flex items-center gap-1.5">
                         <span className="text-[14px] font-semibold text-brand tracking-tight">
-                          Dr MediLink is typing
+                          {t.chat.typingTitle}
                         </span>
                         <div className="flex items-center gap-1 ml-0.5">
                           <span className="w-1.5 h-1.5 rounded-full bg-brand animate-bounce" style={{ animationDuration: "0.8s", animationDelay: "0ms" }}></span>
@@ -249,7 +254,7 @@ export const ChatMessages: React.FC<ChatMessagesProps> = ({
                         </div>
                       </div>
                       <span className="text-[12.5px] text-text-muted">
-                        Taking a look at your symptoms…
+                        {t.chat.typingBody}
                       </span>
                     </div>
                   </div>
@@ -306,18 +311,18 @@ export const ChatMessages: React.FC<ChatMessagesProps> = ({
                     <button
                       onClick={() => handleCopy(msg.id, msg.content)}
                       className="flex items-center gap-1 text-[12px] text-text-muted hover:text-brand transition-colors px-2 py-0.5 rounded hover:bg-bg-soft"
-                      aria-label="Copy message"
-                      title="Copy response"
+                      aria-label={t.chat.copyAria}
+                      title={t.chat.copyTitle}
                     >
                       {isCopied ? (
                         <>
                           <Check className="w-3.5 h-3.5 text-brand" />
-                          <span className="text-brand font-medium">Copied</span>
+                          <span className="text-brand font-medium">{t.chat.copied}</span>
                         </>
                       ) : (
                         <>
                           <Copy className="w-3.5 h-3.5" />
-                          <span>Copy</span>
+                          <span>{t.chat.copy}</span>
                         </>
                       )}
                     </button>
@@ -328,18 +333,18 @@ export const ChatMessages: React.FC<ChatMessagesProps> = ({
                       className={`flex items-center gap-1 text-[12px] px-2 py-0.5 rounded hover:bg-bg-soft transition-colors ${
                         isSpeaking ? "text-brand font-medium" : "text-text-muted hover:text-brand"
                       }`}
-                      aria-label={isSpeaking ? "Stop listening" : "Read aloud"}
-                      title={isSpeaking ? "Stop speaking" : "Listen to response"}
+                      aria-label={isSpeaking ? t.chat.listenStopAria : t.chat.listenAria}
+                      title={isSpeaking ? t.chat.listenStopTitle : t.chat.listenTitle}
                     >
                       {isSpeaking ? (
                         <>
                           <VolumeX className="w-3.5 h-3.5 text-brand animate-pulse" />
-                          <span>Stop</span>
+                          <span>{t.chat.listenStop}</span>
                         </>
                       ) : (
                         <>
                           <Volume2 className="w-3.5 h-3.5" />
-                          <span>Listen</span>
+                          <span>{t.chat.listen}</span>
                         </>
                       )}
                     </button>

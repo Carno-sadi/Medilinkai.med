@@ -4,11 +4,12 @@ interface SegmentedControlProps {
   options: { label: string; value: string; disabled?: boolean }[];
   value: string;
   onChange: (val: string) => void;
+  className?: string;
 }
 
-export const SegmentedControl: React.FC<SegmentedControlProps> = ({ options, value, onChange }) => {
+export const SegmentedControl: React.FC<SegmentedControlProps> = ({ options, value, onChange, className }) => {
   return (
-    <div className="inline-flex bg-bg-soft p-1 rounded-lg">
+    <div className={`inline-flex bg-bg-soft p-1 rounded-lg ${className || ""}`}>
       {options.map((opt) => {
         const isActive = value === opt.value;
         return (

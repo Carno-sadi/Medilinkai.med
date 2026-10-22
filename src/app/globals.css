@@ -97,6 +97,39 @@
   --navbar-h: 76px;
   --navbar-h-scrolled: 64px;
   --content-offset: 76px;
+  /* The fixed mobile bottom navigation (h-16 + pb-safe). Full-height
+     screens (chat) must subtract it or the composer slides underneath. */
+  --bottom-nav-h: 64px;
+}
+
+/* Full-height screens (the chat page) sized to what is actually visible:
+   below the fixed top navbar AND above the fixed mobile bottom nav.
+   dvh follows the shrinking browser chrome on mobile (100vh does not),
+   so the composer stays reachable when the keyboard/URL bar appear.
+   md+ has no bottom nav, so it only clears the top navbar. */
+.chat-view {
+  height: calc(100vh - var(--content-offset) - var(--bottom-nav-h));
+}
+@supports (height: 100dvh) {
+  .chat-view {
+    height: calc(100dvh - var(--content-offset) - var(--bottom-nav-h));
+  }
+}
+@media (min-width: 768px) {
+  .chat-view {
+    height: calc(100vh - var(--content-offset));
+  }
+}
+
+/* On the chat screen the message column is already taller than the space
+   between the two fixed bars, so the footer would only add mobile bounce
+   (rubber-banding) below a non-scrollable page. Emails/legal links stay
+   reachable in the drawer; the footer remains on every other route.
+   :has() degrades gracefully — older browsers keep the old behaviour. */
+@media (max-width: 767px) {
+  body:has(.chat-view) footer {
+    display: none;
+  }
 }
 
 @layer base {

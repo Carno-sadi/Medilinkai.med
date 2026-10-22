@@ -9,6 +9,7 @@ import {
   X,
 } from "lucide-react";
 import { searchSessions, type SessionMatch } from "@/lib/chat-search";
+import { useLanguageStore } from "@/stores/useLanguageStore";
 
 interface HistoryDrawerProps {
   isOpen: boolean;
@@ -58,6 +59,7 @@ export const HistoryDrawer: React.FC<HistoryDrawerProps> = ({
   isPremium,
 }) => {
   const [query, setQuery] = useState("");
+  const { t, language } = useLanguageStore();
 
   // Free plan only sees the last 3. Search runs on THIS list, never on
   // the full history — otherwise search would leak locked chats.
@@ -79,11 +81,11 @@ export const HistoryDrawer: React.FC<HistoryDrawerProps> = ({
   const hasQuery = query.trim().length > 0;
 
   return (
-    <Drawer isOpen={isOpen} onClose={onClose} title="Chat History">
+    <Drawer isOpen={isOpen} onClose={onClose} title={t.chat.historyTitle}>
       <div className="flex flex-col h-full bg-bg-main p-4">
         {!isPremium && sessions.length > 3 && (
           <div className="mb-4 p-3 bg-accent-soft rounded-lg text-[13px] text-text-primary border border-accent/20">
-            <strong>Free Plan limits history to the last 3 chats.</strong> Upgrade to Premium to unlock your full history and PDF exports.
+            <strong>{t.chat.historyFreeNotice}</strong>
           </div>
         )}
 
@@ -91,7 +93,7 @@ export const HistoryDrawer: React.FC<HistoryDrawerProps> = ({
           <div className="mb-3">
             <div className="relative">
               <label htmlFor="chat-history-search" className="sr-only">
-                Search chat history
+                {t.chat.historySearchLabel}
               </label>
               <Search
                 className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted"
@@ -101,7 +103,7 @@ export const HistoryDrawer: React.FC<HistoryDrawerProps> = ({
                 id="chat-history-search"
                 type="search"
                 autoComplete="off"
-                placeholder="Search chats and messages..."
+                placeholder={t.chat.historySearchPlaceholder}
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
                 onKeyDown={(event) => {
@@ -117,7 +119,7 @@ export const HistoryDrawer: React.FC<HistoryDrawerProps> = ({
                 <button
                   type="button"
                   onClick={() => setQuery("")}
-                  aria-label="Clear search"
+                  aria-label={t.chat.historySearchClear}
                   className="absolute right-2 top-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center rounded-md text-text-muted hover:text-text-primary hover:bg-bg-soft"
                 >
                   <X className="w-4 h-4" aria-hidden="true" />
@@ -131,8 +133,8 @@ export const HistoryDrawer: React.FC<HistoryDrawerProps> = ({
                 aria-live="polite"
               >
                 {matches.length === 0
-                  ? "No matches"
-                  : `${matches.length} of ${displaySessions.length} chats`}
+                  ? t.chat.historySearchNoMatches
+                  : `${matches.length} ${t.chat.historySearchProgress.replace("{q}", String(displaySessions.length))} ${displaySessions.length} ${t.chat.numChats}`}
               </p>
             )}
           </div>
@@ -142,26 +144,26 @@ export const HistoryDrawer: React.FC<HistoryDrawerProps> = ({
           {displaySessions.length === 0 ? (
             <div className="text-center py-12 px-4">
               <h4 className="font-bold text-[16px] text-text-primary mb-1">
-                No conversations yet
+                {t.chat.historyEmptyTitle}
               </h4>
               <p className="text-[13px] text-text-muted">
-                Start a new chat and it will appear here.
+                {t.chat.historyEmptyBody}
               </p>
             </div>
           ) : matches.length === 0 ? (
             <div className="text-center py-12 px-4">
               <h4 className="font-bold text-[16px] text-text-primary mb-1">
-                No chats match “{query.trim()}”
+                {t.chat.historyNoMatchTitle.replace("{q}", query.trim())}
               </h4>
               <p className="text-[13px] text-text-muted mb-3">
-                Try a medicine name, a symptom, or a word from the conversation.
+                {t.chat.historyNoMatchBody}
               </p>
               <button
                 type="button"
                 onClick={() => setQuery("")}
                 className="text-[13px] font-semibold text-brand hover:text-brand-dark"
               >
-                Clear search
+                {t.chat.historySearchClear}
               </button>
             </div>
           ) : (
@@ -197,7 +199,7 @@ export const HistoryDrawer: React.FC<HistoryDrawerProps> = ({
                       )}
                     </div>
                     <div className="text-[12.5px] text-text-muted">
-                      {new Date(session.createdAt).toLocaleDateString()} · {session.modelUsed === "med1-pro" ? "Pro" : "Flash"}
+                      {new Date(session.createdAt).toLocaleDateString(language === "bn" ? "bn-BD" : undefined)} · {session.modelUsed === "med1-pro" ? t.chatHeader.pro : t.chatHeader.flash}
                     </div>
                     {matchedIn === "message" && snippet && (
                       <div
@@ -220,7 +222,7 @@ export const HistoryDrawer: React.FC<HistoryDrawerProps> = ({
                       type="button"
                       onClick={(e) => { e.stopPropagation(); onDownloadSession(session.id); }}
                       className="w-8 h-8 flex items-center justify-center text-text-muted hover:text-brand hover:bg-brand-light rounded-md"
-                      aria-label="Download PDF"
+                      aria-label={t.chat.historyDownload}
                     >
                       <Download className="w-4 h-4" />
                     </button>

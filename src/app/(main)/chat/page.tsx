@@ -6,6 +6,7 @@ import { ChatHeader } from "@/components/chat/ChatHeader";
 import { ChatMessages } from "@/components/chat/ChatMessages";
 import { ChatInput, PendingAttachment } from "@/components/chat/ChatInput";
 import { ChatSidebar } from "@/components/chat/ChatSidebar";
+import { MobileChatSidebar } from "@/components/chat/MobileChatSidebar";
 import { HistoryDrawer } from "@/components/chat/HistoryDrawer";
 import { LimitReachedCard } from "@/components/chat/LimitReachedCard";
 import { SuggestedPrompts } from "@/components/chat/SuggestedPrompts";
@@ -73,6 +74,9 @@ export default function ChatPage() {
   const [inputValue, setInputValue] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [isMoreOpen, setIsMoreOpen] = useState(false);
+  const toggleMore = useCallback(() => setIsMoreOpen((open) => !open), []);
   const [deleteModalId, setDeleteModalId] = useState<string | null>(null);
   const [routeInfo, setRouteInfo] = useState<{
     model: string;
@@ -515,8 +519,37 @@ export default function ChatPage() {
     }
   };
 
+  /** Tools-sheet "Save as PDF": free users are taken to the plan page
+      instead of silently doing nothing. */
+  const handleSavePdf = useCallback(() => {
+    if (!isPremium) {
+      router.push("/subscription");
+      return;
+    }
+    if (!activeSessionId) return;
+    const session = sessions.find((s) => s.id === activeSessionId);
+    if (!session) return;
+
+    // The printed report carries the same handover summary the patient
+    // can send to a doctor, plus the dose reminders they set.
+    const sessionSummary =
+      summaries.find((summary) => summary.sessionId === activeSessionId) ?? null;
+
+    exportChatToPDF(session, profile, sessionSummary, medicationSchedules);
+    showToast("Print dialog opened — choose \"Save as PDF\" to download.", "success");
+  }, [
+    isPremium,
+    activeSessionId,
+    sessions,
+    summaries,
+    profile,
+    medicationSchedules,
+    router,
+    showToast,
+  ]);
+
   return (
-    <div className="flex h-[calc(100vh-var(--content-offset))] overflow-hidden">
+    <div className="flex chat-view overflow-hidden">
       {/* Mobile History Drawer */}
       <HistoryDrawer
         isOpen={isHistoryOpen}
@@ -547,11 +580,24 @@ export default function ChatPage() {
           onModelChange={setSelectedModel}
           onNewChat={() => createNewSession()}
           onOpenHistory={() => setIsHistoryOpen(true)}
-          onOpenMobileMenu={() => setIsHistoryOpen(true)}
+          onOpenSidebar={() => setIsSidebarOpen(true)}
           routeInfo={routeInfo}
           onSummarize={handleSummarize}
           canSummarize={messages.filter((m) => m.role === "user").length >= 2}
           onOpenHealthLog={() => setIsHealthLogOpen(true)}
+          onToggleMore={toggleMore}
+          isMoreOpen={isMoreOpen}
+          sessionCount={sessions.length}
+          repliesLeft={remainingChats}
+          onSavePdf={handleSavePdf}
+        />
+        
+        {/* Mobile Sidebar */}
+        <MobileChatSidebar
+          isOpen={isSidebarOpen}
+          onClose={() => setIsSidebarOpen(false)}
+          dailyUsage={dailyUsage}
+          maxUsage={2}
         />
         
         <ChatMessages
