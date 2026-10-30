@@ -27,68 +27,71 @@ export type DetectedLanguage = "bn" | "banglish" | "en";
 export type TaskType = "emergency" | "serious" | "mental-health" | "minor" | "general";
 export type Complexity = "simple" | "moderate" | "complex";
 
-type ModelKey = "minimax" | "supervl" | "ultra";
+export type ModelProvider = "groq" | "openrouter";
+type ModelKey = "gpt_oss" | "supervl" | "ultra";
 
 interface ModelDefinition {
   id: string;
+  provider: ModelProvider;
   label: string;
   shortLabel: string;
   tier: "flash" | "heavy";
 }
 
 const MODEL_DEFS: Record<ModelKey, ModelDefinition> = {
-  minimax: {
-    id: "nvidia/nemotron-3-ultra-550b-a55b:free",
-    label: "Nemotron 3 Ultra Flash",
-    shortLabel: "Nemotron Flash",
+  gpt_oss: {
+    id: "openai/gpt-oss-120b",
+    provider: "groq",
+    label: "GPT-OSS 120B Flash",
+    shortLabel: "GPT-OSS Flash",
     tier: "flash",
   },
   supervl: {
     id: "nvidia/nemotron-3.5-super-vl:free",
+    provider: "openrouter",
     label: "Nemotron 3.5 Super VL",
     shortLabel: "Nemotron Super VL",
     tier: "heavy",
   },
   ultra: {
     id: "nvidia/nemotron-3-ultra-550b-a55b:free",
+    provider: "openrouter",
     label: "Nemotron 3 Ultra 550B",
     shortLabel: "Nemotron Ultra",
     tier: "heavy",
   },
 };
 
-/* Patience for the first visible content chunk. Healthy observations:
- * MiniMax 1.4–4.5s, Ultra 1.2–5.5s, Super VL 2.8–6.8s. Budgets leave room
- * for congestion without letting a dead endpoint stall the whole demo. */
+/* Patience for the first visible content chunk. Groq LPU is ultra-fast (<2s).
+ * OpenRouter free Nemotron models given 18-20s budget for congestion. */
 const FLASH_TTFT_MS: Record<ModelKey, number> = {
-  minimax: 20_000,
-  ultra: 20_000,
-  supervl: 25_000,
+  gpt_oss: 15_000,
+  supervl: 20_000,
+  ultra: 18_000,
 };
 
 const PRO_TTFT_MS: Record<ModelKey, number> = {
-  minimax: 15_000,
-  ultra: 20_000,
-  supervl: 25_000,
+  gpt_oss: 15_000,
+  supervl: 20_000,
+  ultra: 18_000,
 };
 
-/* max_tokens is only a ceiling — the prompt controls visible length. Heavy
- * reasoning models need a large ceiling because hidden reasoning is billed
- * against the same budget (Super VL can burn 3k+ tokens before replying). */
+/* max_tokens is a ceiling — prompt controls visible length. */
 const FLASH_MAX_TOKENS: Record<ModelKey, number> = {
-  minimax: 3_000,
+  gpt_oss: 1_500,
+  supervl: 4_000,
   ultra: 4_000,
-  supervl: 5_000,
 };
 
 const PRO_MAX_TOKENS: Record<ModelKey, number> = {
-  minimax: 6_000,
-  ultra: 10_000,
-  supervl: 10_000,
+  gpt_oss: 4_000,
+  supervl: 8_000,
+  ultra: 8_000,
 };
 
 export interface ModelCandidate {
   id: string;
+  provider: ModelProvider;
   key: ModelKey;
   label: string;
   shortLabel: string;
@@ -330,24 +333,17 @@ function routeKeys(
   taskType: TaskType,
   complexity: Complexity
 ): ModelKey[] {
-  if (mode === "med1-pro") {
-    return language === "en"
-      ? ["ultra", "supervl", "minimax"]
-      : ["supervl", "minimax", "ultra"];
+  if (mode === "med1-flash") {
+    // Primary: ultra-fast Groq openai/gpt-oss-120b
+    // Fallback: OpenRouter free Nemotron models if Groq is congested or rate-limited
+    return ["gpt_oss", "ultra", "supervl"];
   }
 
-  if (taskType === "emergency") {
-    return language === "en"
-      ? ["ultra", "minimax", "supervl"]
-      : ["minimax", "ultra", "supervl"];
+  // Pro mode: strictly Nemotron 3.5 Super VL & Nemotron 3 Ultra
+  if (language === "en") {
+    return ["ultra", "supervl"];
   }
-  if (taskType === "serious" || taskType === "mental-health") {
-    return ["supervl", "minimax", "ultra"];
-  }
-  if (complexity === "complex") return ["supervl", "minimax", "ultra"];
-  if (language === "banglish") return ["supervl", "minimax", "ultra"];
-  if (language === "bn") return ["minimax", "supervl", "ultra"];
-  return ["minimax", "ultra", "supervl"];
+  return ["supervl", "ultra"];
 }
 
 function buildCandidate(key: ModelKey, mode: ChatMode): ModelCandidate {
@@ -356,6 +352,7 @@ function buildCandidate(key: ModelKey, mode: ChatMode): ModelCandidate {
 
   return {
     id: def.id,
+    provider: def.provider,
     key,
     label: def.label,
     shortLabel: def.shortLabel,
@@ -363,9 +360,8 @@ function buildCandidate(key: ModelKey, mode: ChatMode): ModelCandidate {
     ttftBudgetMs: (pro ? PRO_TTFT_MS : FLASH_TTFT_MS)[key],
     maxTokens: (pro ? PRO_MAX_TOKENS : FLASH_MAX_TOKENS)[key],
     temperature: pro ? 0.65 : 0.6,
-    // Super VL spends far too many tokens at "medium" (observed: whole budget
-    // consumed by hidden reasoning), so it always runs at low effort.
-    reasoningEffort: pro && key === "ultra" ? "medium" : "low",
+    // "low" reasoning effort keeps Pro mode responses under 20-25s
+    reasoningEffort: "low",
   };
 }
 

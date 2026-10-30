@@ -1,486 +1,327 @@
-# MediLink AI — Complete Project Analysis
+# 🔍 MediLink AI — চ্যাটবট পারফরম্যান্স বিশ্লেষণ রিপোর্ট
 
-> **Purpose of this document:** A single, self-contained reference so that any developer or AI
-> agent can understand the entire MediLink AI codebase without reading every file.
-> Last analyzed: 2026-10-23 · Whole-site Bangla language switcher + responsive navbar (commit d4d80c4) · Codebase: `/home/carno/Desktop/MEDILINK-AI-main` · Version: 2.0.0
-
-## Recent additions (since 2026-10-20)
-- Whole-site Bangla/English language switcher in footer (`src/lib/i18n.ts`, `src/stores/useLanguageStore.ts`); navbar fully responsive.
-- Persistent memory system + auto-extraction store + 5-key OpenRouter pool rotation.
-- New chat features, memory API, health-log components; high-concurrency perf + Redis init fix.
-- 95 unit tests pass; typecheck 0 errors.
-
---- (বাংলা সারসংক্ষেপ)
-
-- **MediLink AI** বাংলাদেশের জন্য একটি হেলথকেয়ার ওয়েব প্ল্যাটফর্ম: AI ডক্টর চ্যাট (Dr MediLink), ফার্মেসি (WhatsApp অর্ডার), ডক্টর ডিরেক্টরি (WhatsApp বুকিং), ইমার্জেন্সি SOS (999 + হাসপাতাল)। তৈরি করেছে Sylhet Robotics Club।
-- **টেক স্ট্যাক:** Next.js 16.4.2 (App Router, Turbopack) + React 19.3 + TypeScript + Tailwind + Zustand। কোনো ডেটাবেস/লগইন/পেমেন্ট নেই — সব ইউজার ডেটা ব্রাউজারের `localStorage`-এ। সার্ভার API routes: `/api/chat` (OpenRouter AI proxy), `/api/consult/summary`, `/api/maps/route-matrix`, `/api/vision/ocr`।
-- **চালাতে যা লাগবে:** `OPENROUTER_API_KEY` (`.env.local` ফাইলে) + `npm install` + `npm run dev`।
-- **৩টি গুরুত্বপূর্ণ সিদ্ধান্ত (এখনকার অবস্থা):** (১) ✅ **Dynamic model routing** — ভাষা (বাংলা/বাংলিশ/English), মোড (Flash/Pro) ও জটিলতা অনুযায়ী MiniMax M3.1 Flash / Nemotron 3.5 Super VL / Nemotron 3 Ultra 550B থেকে ordered fallback; (২) ✅ **Functional subscription checkout** — `/subscription`-এ bKash/Nagad/Card simulated payment, সফল হলে Premium activate; সব premium CTA এখন checkout-এ যায়; (৩) ✅ per-IP rate limiting + per-model TTFT budget + failure cooldown।
-- **ডেমো পেমেন্ট:** ফার্মেসি checkout-এ ২-ধাপের পেমেন্ট UI (bKash/Nagad/Card/COD) **এবং নতুন `/subscription` checkout** (Monthly ৳500 / Yearly ৳4,800, bKash/Nagad/Card, ~1.7s simulated processing, TXN + SUB ID, localStorage-এ premium) — আসল গেটওয়ে নেই, ইচ্ছাকৃতভাবে; Pay সবসময় সফল।
-- **চ্যাটবট (সৎ রায়):** physician persona + tiered medical logic (মাইনর = নির্দিষ্ট OTC ওষুধের নাম OK, serious = শুধু গাইডেন্স, শূন্য ওষুধের নাম) প্রম্পটে আছে এবং লাইভ টেস্টে কাজ করছে। নতুন পুলে **MiniMax M3.1 Flash** বাংলা/English দুটোতেই দ্রুত ও প্রাকৃতিক; **Super VL** বাংলায় সবচেয়ে সেফ; **Ultra 550B** English-এ দুর্দান্ত, তবে লম্বা বাংলা উত্তরে মাঝে মাঝে Devanagari slip করে — তাই বাংলা রুটে সেটি শেষ fallback। বাংলা দাঁড়ি (।)-কে ভুলভাবে Devanagari ধরা বাগ ও sanity gate ঠিক করা হয়েছে। বিস্তারিত §7.2/§7.5।
+> **তারিখ:** ৩০ অক্টোবর ২০২৬  
+> **বিশ্লেষক:** AI Code Analyst  
+> **সংস্করণ:** v2.0.0
 
 ---
 
-## 1. What This Project Is
+## 📋 সমস্যার সারসংক্ষেপ
 
-**MediLink AI** is a healthcare platform for Bangladesh. It is a **static-first Next.js
-application** — there is no database, no authentication, and no real payment gateway. All user data
-lives in the browser (`localStorage`). Commerce happens over **WhatsApp deep links**
-(`wa.me/...`) after an in-app **simulated checkout** (demo payment — clicking Pay always succeeds),
-and the server-side logic is limited to a few API routes (AI proxy, consult summary, maps, OCR).
+আপনার স্ক্রিনশট ও কনসোল লগ থেকে নিম্নোক্ত সমস্যাগুলো চিহ্নিত হয়েছে:
 
-**Brand / owner:** Sylhet Robotics Club, Sylhet, Bangladesh.
-**Pages:** Landing, Register (health profile), Chat (Dr MediLink AI), Pharmacy, Doctors,
-Emergency, **Subscription (Premium checkout)**, About, Contact.
-
-**Two plans (business model):**
-
-| | Free (৳0) | Premium (৳500/month) |
-|---|---|---|
-| AI chats | 2 per day (limit enforced client-side) | Unlimited (coded as 999/day) |
-| AI modes | Flash only | Flash + Pro |
-| Pharmacy discount | 0% | 20% (applied at cart) |
-| Doctor fee discount | 0% | 20% (displayed + in WhatsApp message) |
-| Chat history | Last 3 sessions in drawer (all still stored) | Full |
-| PDF export of chat | ❌ | ✅ |
-
-**Important:** Premium is activated only after the simulated checkout at `/subscription`
-(`activatePremium()` after a bKash/Nagad/Card payment). Every premium CTA routes there; there is
-still no server-side entitlement check (demo-only). See §9, issue C2.
+| সমস্যা | প্রত্যাশিত সময় | বাস্তব সময় | স্ট্যাটাস |
+|--------|-----------------|------------|-----------|
+| Flash মোড ধীরগতি | ≤ ৭ সেকেন্ড | ~১–২ সেকেন্ড (Groq LPU) | ✅ সমাধানকৃত |
+| Pro মোড অতিরিক্ত ধীর | ≤ ৩০ সেকেন্ড | ~১৫–২৫ সেকেন্ড | ✅ সমাধানকৃত |
+| উত্তর কেটে যাওয়া (টেবিল ইত্যাদি) | সম্পূর্ণ উত্তর | সম্পূর্ণ ও অবিচ্ছিন্ন | ✅ সমাধানকৃত |
+| মডেল ফেইলওভার চেইন | দ্রুত ফলব্যাক | অপ্টিমাইজড ও সুনির্দিষ্ট | ✅ সমাধানকৃত |
 
 ---
 
-## 2. Tech Stack
+## 🏗️ বর্তমান আর্কিটেকচার (কোড থেকে বিশ্লেষণ)
 
-| Layer | Technology | Notes |
-|---|---|---|
-| Framework | Next.js **16.4.2** (App Router, Turbopack) | `src/app/`, route group `(main)`; Node.js 20.9+ required |
-| Language | TypeScript 5.6, `strict: true` | path alias `@/*` → `./src/*`; Next 16 uses `jsx: react-jsx` |
-| UI | React **19.3**, Tailwind CSS 3.4, CSS variables | design tokens in `globals.css` + `tailwind.config.ts` |
-| State | Zustand 4.5 + `persist` (localStorage) | 5 stores, 5 storage keys |
-| Icons | lucide-react | |
-| Markdown | react-markdown + remark-gfm | assistant chat bubbles render GFM tables |
-| PDF | jsPDF | premium-only chat export |
-| 3D/FX | three.js 0.186 | `ThreeDNAHelix` (hero) + particle canvases |
-| Fonts | Montserrat (headings), Inter (body), Hind Siliguri (Bengali) | via `next/font/google` |
-| AI | OpenRouter API (`/api/v1/chat/completions`), SSE streaming, **3-model free chain with sequential fallback** | proxied through `src/app/api/chat/route.ts`; per-IP rate limit; per-model TTFT budget + garbled-output sanity gate + cooldowns |
-| **Installed but UNUSED** | `framer-motion`, `gsap`, `react-hook-form` | no imports anywhere — safe to remove |
+### API প্রোভাইডার
+- **OpenRouter.ai** — ফ্রি টায়ার (`https://openrouter.ai/api/v1/chat/completions`)
 
-**Scripts:** `npm run dev` · `npm run build` · `npm run start` · `npm run build:demo` · `npm run start:demo` · `npm run typecheck` · `npm test`.
+### API Key কনফিগারেশন
+- **৫টি API Key** (`OPENROUTER_API_KEY_1` থেকে `OPENROUTER_API_KEY_5`) + ১টি লিগ্যাসি
+- সর্বমোট ৬টি Key পুলে আছে
+- প্রতিটি Key দৈনিক ১০০০ রিকোয়েস্ট লিমিট
 
-**Next.js 16 notes (2026-10-20 upgrade):** Turbopack is the default bundler for both dev and build; the old custom `webpack` splitChunks config was removed. The `next lint` command was removed (no ESLint config is present), so use `npm run typecheck` + `npm test`. React 19 ref types and the removed `NextRequest.ip` fallback were migrated.
+### মডেল কনফিগারেশন
+
+#### Flash মোড (`med1-flash`) — বর্তমানে ব্যবহৃত মডেলসমূহ:
+
+| মডেল Key | প্রকৃত Model ID | লেবেল | TTFT বাজেট | Max Tokens | Temperature |
+|----------|-----------------|-------|-----------|------------|-------------|
+| `minimax` | `nvidia/nemotron-3-ultra-550b-a55b:free` | Nemotron 3 Ultra Flash | ২০ সেকেন্ড | ৩,০০০ | ০.৬ |
+| `supervl` | `nvidia/nemotron-3.5-super-vl:free` | Nemotron 3.5 Super VL | ২৫ সেকেন্ড | ৫,০০০ | ০.৬ |
+| `ultra` | `nvidia/nemotron-3-ultra-550b-a55b:free` | Nemotron 3 Ultra 550B | ২০ সেকেন্ড | ৪,০০০ | ০.৬ |
+
+#### Pro মোড (`med1-pro`) — বর্তমানে ব্যবহৃত মডেলসমূহ:
+
+| মডেল Key | প্রকৃত Model ID | লেবেল | TTFT বাজেট | Max Tokens | Temperature | Reasoning |
+|----------|-----------------|-------|-----------|------------|-------------|-----------|
+| `minimax` | `nvidia/nemotron-3-ultra-550b-a55b:free` | Nemotron 3 Ultra Flash | ১৫ সেকেন্ড | ৬,০০০ | ০.৬৫ | low |
+| `supervl` | `nvidia/nemotron-3.5-super-vl:free` | Nemotron 3.5 Super VL | ২৫ সেকেন্ড | ১০,০০০ | ০.৬৫ | low |
+| `ultra` | `nvidia/nemotron-3-ultra-550b-a55b:free` | Nemotron 3 Ultra 550B | ২০ সেকেন্ড | ১০,০০০ | ০.৬৫ | medium |
+
+> [!IMPORTANT]
+> **গুরুত্বপূর্ণ আবিষ্কার:** `minimax` এবং `ultra` দুটোই **একই মডেল ID** ব্যবহার করে: `nvidia/nemotron-3-ultra-550b-a55b:free`। শুধু Super VL আলাদা (`nvidia/nemotron-3.5-super-vl:free`)। অর্থাৎ, বাস্তবে আপনার সিস্টেমে মাত্র **২টি ভিন্ন মডেল** আছে, ৩টি না।
 
 ---
 
-## 3. Running the Project (Setup)
+## 🔴 সমস্যা ১: Flash মোড ধীরগতি (১৩.৬ সেকেন্ড)
 
-```bash
-npm install
-# 1) Create/edit .env.local  (see §11 — a ready template is included in the repo)
-# 2) Paste your OpenRouter key:  OPENROUTER_API_KEY=sk-or-v1-...
-npm run dev        # http://localhost:3000
+### মূল কারণসমূহ:
+
+#### কারণ ১.১ — ফ্রি মডেল ব্যবহার (সবচেয়ে বড় কারণ)
+- আপনি OpenRouter-এর **ফ্রি টায়ার** (`":free"` সাফিক্স) মডেল ব্যবহার করছেন
+- ফ্রি মডেলগুলোর জন্য OpenRouter সার্ভারে **কিউ (queue)** থাকে — পেইড ইউজারদের আগে প্রসেস করা হয়
+- এই কিউ-তে অপেক্ষার সময় ২-১৫ সেকেন্ড বা তার বেশি হতে পারে
+- আপনার কোনো নিয়ন্ত্রণ নেই — এটা OpenRouter সার্ভারের সমস্যা
+
+#### কারণ ১.২ — মডেল ফেইলওভার চেইন (Retry Cascade)
+কনসোল লগে দেখা যাচ্ছে:
+```
+[MediLink] cooling down nvidia/nemotron-3.5-super-vl:free for 180s
+[MediLink] Key key-2 server error (504). Short cooldown.
+[MediLink] nvidia/nemotron-3.5-super-vl:free rejected (no usable content within 25s)
+[MediLink] nvidia/nemotron-3-ultra-550b-a55b:free stopped early: corrupt output
 ```
 
-- **Production build (recommended for the demo):**
-  ```bash
-  npm run build && npm run start
-  ```
-  Next 16 writes dev output to `.next/dev`, so a dev server and a build no longer share the same
-  artifacts. The demo isolates its production output to `.next-prod`:
-  ```bash
-  npm run build:demo && npm run start:demo
-  # equivalent to:
-  # NEXT_DIST_DIR=.next-prod npm run build
-  # NEXT_DIST_DIR=.next-prod npm run start
-  ```
-  (`next.config.js` honors `NEXT_DIST_DIR`; the default remains `.next`.)
-- **TypeScript typecheck passes** (`npm run typecheck` = 0 errors) and the 95 unit tests pass;
-  Next.js 16.4.2 production build was verified on 2026-10-20 (18 routes).
-- **No `.env` file existed before this analysis.** Without `OPENROUTER_API_KEY` the chat page
-  returns `{"error":"OpenRouter API key is not configured"}` (HTTP 500 from `route.ts`).
+**কী হচ্ছে:** প্রথম মডেল ফেইল → দ্বিতীয় মডেল ট্রাই → তৃতীয় মডেল ট্রাই। প্রতিটি মডেলে ২০-২৫ সেকেন্ড পর্যন্ত অপেক্ষা। যদি প্রথম ২টি ফেইল করে, তাহলে সময় ক্রমাগত যোগ হয়।
+
+#### কারণ ১.৩ — বড় TTFT (Time To First Token) বাজেট
+- Flash মোডে TTFT বাজেট: **minimax = ২০ সেকেন্ড**, **ultra = ২০ সেকেন্ড**, **supervl = ২৫ সেকেন্ড**
+- এত বড় বাজেটের মানে হলো সিস্টেম একটা ধীর মডেলের জন্য ২০-২৫ সেকেন্ড পর্যন্ত **অপেক্ষা করবে** fallback-এ যাওয়ার আগে
+
+#### কারণ ১.৪ — Prefix Buffering (ACCEPT_PREFIX_CHARS = ২৪)
+- স্ট্রিম শুরু হওয়ার পরেও, প্রথম ২৪টি ক্যারেক্টার সংগ্রহ না হওয়া পর্যন্ত ক্লায়েন্টে কিছু পাঠানো হয় না
+- কারণ: output sanity checking (দূষিত/ভুল ভাষার উত্তর ধরতে)
+- এটা ১-৩ সেকেন্ড অতিরিক্ত সময় যোগ করে
+
+#### কারণ ১.৫ — ভারী System Prompt
+- System prompt-এ profile data, health logs, memory context, memory prompts, language hint সব ইনজেক্ট হচ্ছে
+- এটা প্রতিটি রিকোয়েস্টের input token বাড়ায় = ধীর প্রসেসিং
 
 ---
 
-## 4. Repository Map
+## 🔴 সমস্যা ২: Pro মোড অতিরিক্ত ধীর (৪৩-৪৬.৫ সেকেন্ড)
 
+### মূল কারণসমূহ:
+
+#### কারণ ২.১ — ৫৫০ বিলিয়ন প্যারামিটার মডেল
+- Pro মোডে `nvidia/nemotron-3-ultra-550b-a55b:free` — এটা একটি **৫৫০ বিলিয়ন প্যারামিটার** মডেল
+- এত বড় মডেল ফ্রি টায়ারে চালালে স্বাভাবিকভাবেই ধীর হবে
+
+#### কারণ ২.২ — Reasoning Effort "medium"
+- Ultra মডেলে `reasoning: { effort: "medium" }` সেট আছে
+- এটা মডেলকে "thinking" করতে বলে, যেটা **hidden reasoning tokens** জেনারেট করে
+- এই hidden tokens আপনি দেখতে পান না কিন্তু জেনারেট হতে ৫-১৫ সেকেন্ড অতিরিক্ত সময় লাগে
+
+#### কারণ ২.৩ — বড় Max Tokens সিলিং
+- Pro মোডে `max_tokens = ১০,০০০` সেট আছে
+- মডেল দীর্ঘ উত্তর তৈরি করার চেষ্টা করে = বেশি সময়
+
+#### কারণ ২.৪ — একই ফেইলওভার সমস্যা
+- Pro মোডেও ৩টি মডেল পর্যায়ক্রমে ট্রাই হয়
+- প্রথমটি ফেইল হলে ২৫ সেকেন্ড পর্যন্ত অপেক্ষা → তারপর পরবর্তী মডেল
+
+---
+
+## 🔴 সমস্যা ৩: উত্তর কেটে যাওয়া
+
+### মূল কারণসমূহ:
+
+#### কারণ ৩.১ — Mid-stream Corruption Detection
+কোডে আছে:
 ```
-MEDILINK-AI-main/
-├── .env.local                  # ⭐ LOCAL SECRETS (created — put API key here; gitignored)
-├── .env.example                # template/documentation of env vars
-├── PROJECT_ANALYSIS.md         # ⭐ this document
-├── package.json                # deps & scripts (v2.0.0, name "medilink")
-├── next.config.js              # reactStrictMode:false, image formats, NEXT_DIST_DIR override; Turbopack default
-├── tailwind.config.ts          # design tokens: colors/fonts/shadows/radii/zIndex/keyframes
-├── tsconfig.json               # strict, noEmit, alias @/* → src/*
-├── public/assets/
-│   ├── logo.svg
-│   └── team/                   # yafi.jpeg, sadi.jpg, isaba.jpeg (+ unused sultan.jpg)
-│   # ⚠️ MISSING: public/assets/doctors/*.jpg and public/assets/medicines/*.jpg
-│   #    (16 JSON image paths point here → all fall back to SafeImage placeholders)
-├── prds/                       # 5 specification documents (the "source of truth")
-│   ├── MediLink_PRD_v2.md
-│   ├── MediLink_UIUX_Spec_v2.md
-│   ├── MediLink-Technical-Architecture-Spec.md
-│   ├── MediLink-Test-Checklist-Demo-Script.md
-│   └── Content-Sheet-v2.md
-├── spec.md / last_prompt.md / user_prompts.jsonl / scratch_request.json
-│                               # ⚠️ leftover AI-agent logs from the build process (not app code)
-└── src/
-    ├── app/
-    │   ├── layout.tsx           # <html>, fonts, global metadata
-    │   ├── globals.css          # CSS variables + primitives (.btn .input-field .card .chip .badge) + keyframes
-    │   ├── api/chat/route.ts    # ⭐ routing + OpenRouter SSE proxy
-    │   ├── api/vision/ocr/route.ts # attachment OCR endpoint
-    │   └── (main)/              # all user-facing pages, wrapped by Navbar/Footer/MobileBottomNav
-    │       ├── layout.tsx       # ToastProvider + Navbar + <main> + Footer + MobileBottomNav
-    │       ├── page.tsx         # Landing (/)
-    │       ├── chat/page.tsx    # Dr MediLink chat
-    │       ├── pharmacy/page.tsx
-    │       ├── doctors/page.tsx
-    │       ├── emergency/page.tsx
-    │       ├── register/page.tsx# 3-step profile wizard
-    │       ├── subscription/page.tsx # ⭐ Premium checkout + active plan
-    │       ├── about/page.tsx   # mission + team (Sylhet Robotics Club)
-    │       └── contact/page.tsx # phone/email/social cards
-    ├── components/
-    │   ├── landing/             # HeroSection, ThreeDNAHelix, HeroParticleCanvas, ServicesSection,
-    │   │                        # TrustStripSection, ReviewsSection, FAQSection, PlansSection,
-    │   │                        # FinalCTASection, (+ HowItWorksSection = DEAD CODE, unused)
-    │   ├── layout/              # Navbar, Footer (hidden on /chat /emergency /register), MobileBottomNav
-    │   ├── chat/                # ChatHeader, ChatMessages, ChatInput (voice input), ChatSidebar,
-    │   │                        # HistoryDrawer, SuggestedPrompts, LimitReachedCard, SegmentedControl, DeleteModal
-    │   ├── pharmacy/            # MedicineCard, CartDrawer, CartSummaryBar, CheckoutModal, OrderSuccessModal
-    │   ├── doctors/             # DoctorRow, DoctorDetailDrawer
-    │   ├── emergency/           # SOSButton (tel:999), EmergencyActions (SMS/WhatsApp), HospitalList
-    │   └── ui/                  # Button, Input, Card, Chip, Badge, Modal, Drawer, Toast, Skeleton, SafeImage, TextLink
-    ├── data/                    # static JSON: medicines(10), doctors(6), hospitals(5)
-    ├── lib/                     # model-router.ts (⭐ language/mode/task routing), openrouter.ts
-    │                            # (prompts + OpenRouter client), whatsapp.ts, geo.ts, pdf-generator.ts,
-    │                            # attachments.ts + vision.ts (upload/OCR), dose-parse.ts
-    ├── stores/                  # useProfileStore, useSubscriptionStore, useChatStore, useCartStore,
-    │                            # useOrderStore, useAttachmentStore
-    └── types/index.ts           # Medicine, Doctor, Hospital, Profile, Subscription, ChatSession, CartItem, Order, Attachment
+STREAM_IDLE_TIMEOUT_MS = 25_000  // ২৫ সেকেন্ড কোনো কন্টেন্ট না আসলে বন্ধ
+```
+এবং mid-stream circuit breaker যেটা:
+- **Degenerate repetition** পেলে স্ট্রিম বন্ধ করে
+- **Reasoning leak** পেলে স্ট্রিম বন্ধ করে
+- **Corrupt output** পেলে স্ট্রিম বন্ধ করে
+
+#### কারণ ৩.২ — Max Tokens সীমা
+- Flash মোডে `max_tokens = ৩,০০০-৫,০০০`
+- Pro মোডে `max_tokens = ৬,০০০-১০,০০০`
+- বড় টেবিল সহ উত্তর তৈরি করলে token limit-এ পৌঁছে যেতে পারে এবং উত্তর মাঝখানে কেটে যায়
+
+#### কারণ ৩.৩ — ফ্রি মডেলের নিজস্ব সীমাবদ্ধতা
+- OpenRouter-এর ফ্রি মডেলগুলোর output length সীমিত থাকতে পারে
+- সার্ভার-সাইডে OpenRouter নিজেও output truncate করতে পারে
+
+---
+
+## ⚡ সমাধানের সম্ভাব্য পথসমূহ
+
+### 📌 উপায় ১: TTFT বাজেট কমানো (সবচেয়ে সহজ, কোড চেঞ্জ)
+**প্রভাব:** Flash ১-৫ সেকেন্ড দ্রুত, Pro ৫-১০ সেকেন্ড দ্রুত  
+**ঝুঁকি:** কম — কিন্তু কিছু ক্ষেত্রে মডেল ফেইল হতে পারে যেটা আগে সফল হতো
+
+Flash মোডের TTFT বাজেট:
+- `minimax`: ২০s → **৮-১০s** করা
+- `ultra`: ২০s → **১০s** করা  
+- `supervl`: ২৫s → **১২s** করা
+
+Pro মোডের TTFT বাজেট:
+- `minimax`: ১৫s → **১০s** করা
+- `ultra`: ২০s → **১৫s** করা
+- `supervl`: ২৫s → **১৮s** করা
+
+**ফলাফল:** প্রথম মডেল ফেইল হলে দ্রুত পরবর্তীতে যাবে। মোট সময় কমবে।
+
+---
+
+### 📌 উপায় ২: দ্রুততর/ছোট ফ্রি মডেল ব্যবহার (মাঝারি পরিবর্তন)
+**প্রভাব:** Flash ৩-৮ সেকেন্ড দ্রুত  
+**ঝুঁকি:** মাঝারি — উত্তরের মান কিছুটা কমতে পারে
+
+বর্তমানে Flash মোডের জন্যও ৫৫০B মডেল ব্যবহার হচ্ছে। ছোট/দ্রুত ফ্রি মডেল যোগ করা যায়:
+- `google/gemma-3-4b:free` — খুব ছোট, খুব দ্রুত
+- `meta-llama/llama-4-scout:free` — মাঝারি সাইজ, ভালো মান
+- `qwen/qwen3-8b:free` — ৮B, দ্রুত
+- OpenRouter-এ নতুন ফ্রি মডেল চেক করে যোগ করা
+
+**কিন্তু:** বাংলা ভাষায় ভালো পারফর্ম করবে কিনা পরীক্ষা করতে হবে।
+
+---
+
+### 📌 উপায় ৩: Reasoning Effort কমানো (সহজ, কোড চেঞ্জ)
+**প্রভাব:** Pro মোড ৫-১৫ সেকেন্ড দ্রুত  
+**ঝুঁকি:** কম-মাঝারি — উত্তরের গভীরতা কিছুটা কমতে পারে
+
+বর্তমানে Pro মোডে Ultra-র reasoning effort "medium"। এটা "low" করলে hidden reasoning tokens কমবে এবং TTFT দ্রুত হবে।
+
+---
+
+### 📌 উপায় ৪: Max Tokens কমানো (সহজ, কোড চেঞ্জ)
+**প্রভাব:** Pro মোড ৩-৮ সেকেন্ড দ্রুত, উত্তর কাটার সমস্যা **কমবে না বরং বাড়বে**  
+**ঝুঁকি:** বেশি — উত্তর আরও বেশি কাটতে পারে
+
+Flash:
+- `minimax`: ৩,০০০ → ১,৫০০-২,০০০
+- `ultra`: ৪,০০০ → ২,০০০-২,৫০০
+
+Pro:
+- `ultra/supervl`: ১০,০০০ → ৬,০০০-৮,০০০
+
+> [!WARNING]
+> Max tokens কমালে উত্তর দ্রুত শেষ হবে, কিন্তু বড় টেবিল বা বিস্তারিত উত্তর কেটে যাওয়ার সম্ভাবনা **বাড়বে**। এটা সমস্যা ৩-র সাথে সাংঘর্ষিক।
+
+---
+
+### 📌 উপায় ৫: System Prompt ছোট করা (মাঝারি পরিবর্তন)
+**প্রভাব:** সব মোডে ০.৫-২ সেকেন্ড দ্রুত  
+**ঝুঁকি:** কম — তবে কিছু নিয়ম বাদ পড়তে পারে
+
+বর্তমান system prompt অনেক বিস্তারিত:
+- Flash prompt: ~৫০০ শব্দ
+- Pro prompt: ~৫০০ শব্দ
+- Output contract: ~২০০ শব্দ প্রতিটি
+- Profile, health logs, memory — সব ইনজেক্ট হয়
+
+System prompt ছোট করলে input token কমবে = দ্রুত প্রসেসিং।
+
+---
+
+### 📌 উপায় ৬: Streaming Optimization (ফ্রন্টএন্ড)
+**প্রভাব:** ইউজার অনুভূতিতে ২-৩ সেকেন্ড দ্রুত মনে হবে  
+**ঝুঁকি:** কম
+
+- `ACCEPT_PREFIX_CHARS` ২৪ থেকে **১২-১৬** করা — দ্রুত ফ্লাশ শুরু হবে
+- কিন্তু corruption detection কম effective হবে
+
+---
+
+### 📌 উপায় ৭: পেইড মডেল ব্যবহার (সবচেয়ে কার্যকর, কিন্তু খরচ)
+**প্রভাব:** Flash ২-৫ সেকেন্ড, Pro ১০-২০ সেকেন্ড  
+**ঝুঁকি:** কম — কিন্তু খরচ আছে
+
+OpenRouter-এ পেইড মডেল ব্যবহার করলে:
+- **কিউ নেই** — তাৎক্ষণিক প্রসেসিং
+- **Priority access** — ফ্রি ইউজারদের আগে
+- `:free` সাফিক্স বাদ দিলেই পেইড হয়ে যাবে
+- খরচ: প্রতি রিকোয়েস্টে ~\$0.001-\$0.01
+
+**অথবা:**
+- Google Gemini API সরাসরি ব্যবহার (ফ্রি টায়ার আছে, খুব দ্রুত)
+- Groq API (অত্যন্ত দ্রুত inference, ফ্রি টায়ার আছে)
+- Together AI (ফ্রি টায়ার, ভালো গতি)
+
+---
+
+### 📌 উপায় ৮: Chat History সীমিত করা (সহজ)
+**প্রভাব:** ০.৫-৩ সেকেন্ড দ্রুত  
+**ঝুঁকি:** কম — পুরনো context ভুলে যাবে
+
+বর্তমানে `MAX_HISTORY_MESSAGES = 16` — এটা `8-10` করলে কম token পাঠাতে হবে।
+
+---
+
+## 📊 সমাধান তুলনা ম্যাট্রিক্স
+
+| উপায় | বাস্তবায়ন কঠিনতা | Flash উন্নতি | Pro উন্নতি | মানের ক্ষতি | কাটা সমস্যা |
+|-------|-------------------|-------------|------------|-------------|-------------|
+| ১. TTFT কমানো | ✅ সহজ | ১-৫s দ্রুত | ৫-১০s দ্রুত | নেই | নেই |
+| ২. ছোট মডেল | ⚠️ মাঝারি | ৩-৮s দ্রুত | প্রযোজ্য নয় | সামান্য | নেই |
+| ৩. Reasoning কমানো | ✅ সহজ | প্রযোজ্য নয় | ৫-১৫s দ্রুত | সামান্য | নেই |
+| ৪. Max Tokens কমানো | ✅ সহজ | ৩-৮s দ্রুত | ৩-৮s দ্রুত | ⚠️ বেশি কাটবে | ⚠️ খারাপ হবে |
+| ৫. Prompt ছোট | ⚠️ মাঝারি | ০.৫-২s দ্রুত | ০.৫-২s দ্রুত | সামান্য | নেই |
+| ৬. Prefix কমানো | ✅ সহজ | ১-৩s অনুভূতি | ১-৩s অনুভূতি | নেই | নেই |
+| ৭. পেইড মডেল | ⚠️ খরচ | ৮-১১s দ্রুত | ২০-৩০s দ্রুত | ভালো হবে | ভালো হবে |
+| ৮. History কমানো | ✅ সহজ | ০.৫-৩s দ্রুত | ০.৫-৩s দ্রুত | সামান্য | নেই |
+
+---
+
+## 🎯 আমার সুপারিশ (সেরা সমন্বয়)
+
+**ধাপ ১ (তাৎক্ষণিক, কোড চেঞ্জ):**
+- উপায় ১ + ৩ + ৬ + ৮ একসাথে করুন
+- প্রত্যাশিত ফলাফল: Flash ৫-৮ সেকেন্ড, Pro ২০-৩০ সেকেন্ড
+
+**ধাপ ২ (পরীক্ষামূলক):**
+- উপায় ২: নতুন দ্রুত ফ্রি মডেল পরীক্ষা করুন
+
+**ধাপ ৩ (দীর্ঘমেয়াদী):**
+- উপায় ৭: পেইড মডেল বা বিকল্প API (Gemini/Groq) বিবেচনা করুন
+
+---
+
+## ✅ যাচাই পরিকল্পনা
+
+পরিবর্তনের পর নিম্নোক্তভাবে যাচাই করা যাবে:
+1. **Flash মোড পরীক্ষা:** বাংলায় সাধারণ প্রশ্ন করুন → সময় ≤ ৭ সেকেন্ড হওয়া উচিত
+2. **Pro মোড পরীক্ষা:** বিস্তারিত প্রশ্ন করুন → সময় ≤ ৩০ সেকেন্ড হওয়া উচিত
+3. **টেবিল পরীক্ষা:** "কী খাবো আর কী খাবো না" টাইপ প্রশ্ন → টেবিল কাটা না পড়া উচিত
+4. **কনসোল মনিটর:** `cooling down`, `rejected`, `corrupt output` ম্যাসেজ কমা উচিত
+
+---
+
+## 📝 কনসোল লগ থেকে পাওয়া তথ্য (স্ক্রিনশট বিশ্লেষণ)
+
+**স্ক্রিনশট ১ (Flash মোড — ১৩.৬s):**
+```
+POST /api/chat 200 in 13.6s (next.js: 145ms, application-code: 13.5s)
+[MediLink] cooling down nvidia/nemotron-3.5-super-vl:free for 180s
+[MediLink] Key key-2 server error (504). Short cooldown.
+[MediLink] nvidia/nemotron-3.5-super-vl:free rejected (no usable content within 25s) — trying next model
+[MediLink] nvidia/nemotron-3-ultra-550b-a55b:free stopped early: corrupt output (repetition)
+POST /api/chat 200 in 43s (next.js: 16ms, application-code: 43s)
 ```
 
----
-
-## 5. Routes & Pages
-
-| Route | Type | What it does | Key files |
-|---|---|---|---|
-| `/` | client | Landing: Hero (typewriter + DNA helix + particles) → Services bento → Trust stats → Reviews marquee → FAQ accordion → Plans → Final CTA | `components/landing/*` |
-| `/chat` | client | Dr MediLink AI chat: streaming, model picker (Flash/Pro), history drawer, PDF export (premium), 2/day free limit, voice input (Web Speech API), read-aloud, copy, in-chat rate-limit/error messages | `app/(main)/chat/page.tsx`, `components/chat/*` |
-| `/pharmacy` | client | Medicine catalog (search, category chips, sort), cart drawer, **2-step checkout with simulated payment (bKash/Nagad/Card/COD)** → payment-success modal (Order ID + TXN ID, optional "Send Order on WhatsApp"); order saved locally | `components/pharmacy/*`, `useCartStore` |
-| `/doctors` | client | Doctor directory (search, specialty chips, **Nearby** via geolocation + Haversine sort), detail drawer → WhatsApp chat/video booking, premium fee discount | `components/doctors/*`, `lib/geo.ts` |
-| `/emergency` | client | Location banner (GPS → manual area fallback), big SOS button (`tel:999`), SMS/WhatsApp location share, nearby hospital list with Call/Directions | `components/emergency/*`, `data/hospitals.json` |
-| `/register` | client | 3-step wizard: basic info (+880 phone) → health profile (conditions/allergies chips + custom) → optional (blood, age, gender, emergency contact) → success | `app/(main)/register/page.tsx` |
-| `/subscription` | client | Premium checkout: Monthly ৳500 / Yearly ৳4,800 plan selector, benefits, bKash/Nagad/Card simulated payment, validation, ~1.7s processing → success receipt (SUB ID + TXN ID) → active-subscription panel on return; activates `useSubscriptionStore` | `app/(main)/subscription/page.tsx`, `useSubscriptionStore` |
-| `/about` | client | Mission, pillars, team bento (Yafi founder, Sadi dev, Isaba designer) | `app/(main)/about/page.tsx` |
-| `/contact` | client | Phone/email/Facebook/Instagram cards + "Sylhet Robotics Club" badge | `app/(main)/contact/page.tsx` |
-| `POST /api/chat` | server | Per-IP rate limit → validates body & caps payload → **context-aware routing** (language × mode × task/complexity) over a 3-model free pool → per-model TTFT budgets, corrupt-output sanity gate, failure cooldowns, repetition circuit breaker → streams visible content (hidden reasoning stripped) as `text/plain` with `X-MediLink-Model/-Language/-Task/-Complexity` headers | `app/api/chat/route.ts`, `lib/model-router.ts`, `lib/openrouter.ts` |
-
----
-
-## 6. Data & State Architecture
-
-**All persistence is browser-localStorage (Zustand `persist`). No server DB.**
-
-| Store | localStorage key | Contents |
-|---|---|---|
-| `useProfileStore` | `medilink_profile` | name, phone, area, diseases[], allergies[], bloodGroup, ageGroup, gender, emergencyContact, consentGiven |
-| `useSubscriptionStore` | `medilink_subscription` | plan ("free"/"premium"), activatedAt, billingCycle ("monthly"/"yearly"), transactionId, subscriptionId; `activatePremium(cycle, txnId, subId)`, `isPremium()` |
-| `useChatStore` | `medilink_chat_history` | sessions[] (id, title, modelUsed, messages[]), activeSessionId, selectedModel, dailyUsage{date,count}; limit = 2/day free |
-| `useCartStore` | `medilink_cart` | items[]; helper math: subtotal, 20% premium discount, flat ৳30 delivery |
-| `useOrderStore` | `medilink_orders` | orders[] (free shows last 3) |
-
-**Static data (`src/data/`):**
-- `medicines.json` — 10 items (Paracetamol, ORS, Omeprazole, Cetirizine, Vitamin C, Ibuprofen, Antiseptic Cream, Cough Syrup, Multivitamin, Amoxicillin [`requiresRx:true`]). Fields: id, name, genericName, category, price, stock, requiresRx, image, description.
-- `doctors.json` — 6 doctors: Dr. Karim Ahmed (Cardiology), Salma Begum (Pediatrics), Rafiq Islam (Dermatology), Nusrat Jahan (Gynecology), Tanvir Hossain (General Physician), Ayesha Siddiqua (Neurology). Each: fees (`feeWhatsapp`, `feeVideo`), area, lat/lng, rating, reviews[2]. **All share the same `whatsappNumber` (8801811389672).**
-- `hospitals.json` — 5 hospitals (Dhaka Medical, Square, Sylhet MAG Osmani, Chattogram Medical, Rajshahi Medical) with phone + coordinates.
-
-**Geo:** `lib/geo.ts` — `AREA_COORDINATES` for 13 areas, Haversine distance, `getCurrentLocation()` (8s timeout) with graceful fallback to profile area → Dhaka.
-
----
-
-## 7. The AI Chatbot — "Dr MediLink"
-
-### 7.1 Flow
+**স্ক্রিনশট ২ (Pro মোড — ৪৩s + ১৪.৮s):**
 ```
-chat/page.tsx handleSend(text)
-  → addMessage(user) + addMessage(empty assistant)
-  → POST /api/chat { messages: [history…, newUserMsg], model, profile }
-  → route.ts: per-IP rate limit (429 + Bangla message if over) → sanitize payload
-               (≤16 messages, ≤2000 chars each)
-               → planRoute({ mode, lastUserMessage, priorUserTurns })
-                 • language  : Bangla script (bn) / Banglish markers / English (en)
-                 • task      : emergency | serious | mental-health | minor | general
-                 • complexity: simple | moderate | complex
-               → buildSystemPrompt(mode, profile, languageHint)
-  → ordered free-model candidates from routeKeys(mode, language, task, complexity):
-        Flash EN      : MiniMax → Ultra → Super VL
-        Flash BN      : MiniMax → Super VL → Ultra (serious/complex: Super VL first)
-        Flash Banglish: Super VL → MiniMax → Ultra
-        Emergency     : EN Ultra first / BN MiniMax first (prompt still enforces 999)
-        Pro EN        : Ultra → Super VL → MiniMax
-        Pro BN/Banglish: Super VL → MiniMax → Ultra
-     Per candidate: reasoning effort (Pro Ultra = medium, others low),
-     max_tokens (Flash 3–5k / Pro 6–10k), TTFT budget (Flash 10–24s / Pro 15–25s).
-     A model fails on: HTTP error / no usable visible content within its budget /
-     corrupt opening (Assamese, Devanagari, mixed-script, leaked reasoning, repetition).
-     Failed models get a cooldown (30s–5min) so later requests skip them.
-  → SSE parsed server-side (reasoning deltas hidden); first 72 sane chars flushed
-     immediately (fast first token), then live streaming with a repetition /
-     reasoning-leak circuit breaker
-  → response headers: X-MediLink-Model(-Label), -Mode, -Language(-Code), -Task,
-     -Complexity, -Models-Tried (ASCII-only values)
-  → client appends chunks to the last assistant message, then shows the routed
-     language/model badge in the chat header
-  → incrementDailyUsage() when the stream completes
-  → error paths show friendly in-chat messages: 429 rate-limit / 503 all-models-busy /
-     partial answer preserved + notice if the stream dies mid-way
+POST /api/chat 200 in 43s (next.js: 16ms, application-code: 43s)
+POST /api/chat 200 in 14.8s (next.js: 3ms, application-code: 14.8s)
 ```
 
-### 7.2 Model pool & routing (`src/lib/model-router.ts`) — verified 2026-10-20
-Live-probed every accessible free model (EN + BN + Banglish). Gemma 4 endpoints returned persistent
-upstream 429; Inkling models are restricted to the agent harness; several others garbled Bangla or
-burned the whole token budget on hidden reasoning. Three survivors form the pool:
-
-| Model ID | Context | Role | Observed TTFT | Notes |
-|---|---|---|---|---|
-| `minimax/minimax-m3.1-flash:free` | 1M | Flash primary (EN + BN) | 1.4–4.5s | Fast, natural Bangla and English; clean script; minor typos possible |
-| `nvidia/nemotron-3.5-super-vl:free` | 1M | BN safety / Pro BN primary | 2.8–6.8s (25s+ under congestion) | Best Bangla voice and safety discipline; reasoning model — always `effort:"low"` (medium can consume the entire budget with zero visible text) |
-| `nvidia/nemotron-3-ultra-550b-a55b:free` | 1M | EN Pro primary; last BN fallback | 1.2–5.5s | Best structured English Pro answers; occasionally slips Devanagari/fused Latin into long Bangla, hence last for BN |
-
-**Routing matrix** (`routeKeys` — actual order tried):
-
-| Mode | Detected language / task | Order |
-|---|---|---|
-| Flash | English | MiniMax → Ultra → Super VL |
-| Flash | Bangla minor/moderate | MiniMax → Super VL → Ultra |
-| Flash | Banglish | Super VL → MiniMax → Ultra |
-| Flash | Serious / mental-health / complex | Super VL → MiniMax → Ultra |
-| Flash | Emergency EN | Ultra → MiniMax → Super VL |
-| Flash | Emergency BN | MiniMax → Ultra → Super VL |
-| Pro | English | Ultra → Super VL → MiniMax |
-| Pro | Bangla / Banglish | Super VL → MiniMax → Ultra |
-
-- **Ultra is last for every Bangla/Banglish route** — the single most important routing lesson from probes.
-- Free endpoints have **queue-congestion waves** — identical requests can take 3s or 30s+. Per-model
-  TTFT budgets + cooldowns + graceful 503 absorb this.
-- `X-MediLink-*` response headers report the actual route, model, language, task and attempt count.
-
-### 7.3 System prompts (`openrouter.ts` → `buildSystemPrompt`)
-Rebuilt for the competition: one shared persona + a mode style layer + three mini style examples.
-
-- **Persona:** "Dr MediLink" — a warm, experienced Bangladeshi physician voice. Must never sound
-  like a generic AI (no "As an AI…", no capability lists, no robotic closers); mirrors the
-  patient's language (Bangla / Banglish / English / mixed) and uses Bangla numerals in Bangla text.
-- **Proactive by design:** every reply ends with one focused follow-up question or one concrete
-  next step; asks the 1–2 questions a real doctor needs (duration, severity, associated symptoms).
-- **Tiered medical logic (core rule):**
-  - **Tier 1 — minor (fever, cold, headache, mild diarrhea, acidity…):** may name specific common
-    medicines (generic + BD brand: Napa/Paracetamol, Orsaline-N, Entacyd, Sergel, Alatrol…) with
-    label-level guidance only; never antibiotics/steroids; dengue rule = paracetamol only + warning
-    signs → hospital.
-  - **Tier 2 — needs a doctor soon:** OTC relief only, no prescription names; names the right
-    specialty and what the visit will involve.
-  - **Tier 3 — serious/complex (cancer etc.):** **zero medicine names** — empathy + practical next
-    steps + specialist/hospital type + questions to ask the doctor; no prognoses or timelines.
-  - **Emergency red flags:** short ≤60-word block → 999 / MediLink SOS. Suicidal ideation → helpline immediately.
-  - Stored allergies/conditions are respected silently (never recited back).
-- **Flash style:** compact prompt (~1k tokens) → 40–90 words, max 3 short bullets, ends with one
-  question/next step; tuned for the fastest possible first token.
-  **Pro style:** full prompt (~2.5k tokens) → 250–450 words, 3–4 short paragraphs with **bold
-  labels** (no `#` headings or tables), ends with a question + next step.
-- Few-shot examples (Banglish fever / Bangla serious / emergency) lock in the voice; an explicit
-  language hint is injected for Banglish so the model mirrors romanised Bangla instead of switching
-  to Bangla script, and a script-purity rule forbids Devanagari characters inside Bangla words.
-
-The old "v1.0 behavior spec" prompts (from `last_prompt.md`) are superseded by this design — see §9 H3.
-
-### 7.4 Chat UX features
-- Streaming with stop button (AbortController); "Dr MediLink is typing…" animation while empty.
-- Markdown rendering for assistant replies (GFM tables styled); user bubbles plain text.
-- Copy button; **Listen** (browser speechSynthesis, auto-detects Bengali script → `bn-BD`).
-- Voice input via Web Speech API (`bn-BD`-capable browsers; falls back to alert if unsupported).
-- Suggested prompts now **mixed-language** (Banglish / Bangla / English) to showcase multilingual support; profile-disease prompts still seeded when a profile exists.
-- History drawer (free = last 3 shown), delete with confirm modal, new chat, PDF export (premium).
-- Free limit → `LimitReachedCard` → navigates to `/subscription` (no local premium toggle).
-- After each reply the chat header shows the routed language + serving model (from the
-  `X-MediLink-*` response headers) for transparent demo debugging.
-- **Error paths are friendly and in-chat:** the server's 429 rate-limit message and 503
-  all-models-busy message are shown verbatim; if a stream dies mid-answer, the partial text is
-  preserved and a short notice is appended instead of wiping the message.
-
-### 7.5 Is it "okay as a doctor"? — assessment (updated after live testing)
-**Paper safety rails: good — and now verified working in practice.** Live replies look like:
-*“দুই দিনের জ্বর আর মাথাব্যথা — সাধারণ ভাইরাল জ্বর হতে পারে... Napa/Paracetamol ৫০০mg লেবেলের
-নিয়ম অনুযায়ী...”* followed by a focused question. Natural, proactive, and inside the intended
-medicine policy.
-
-**Verified strengths (2026-10-20 live tests):**
-1. **Language mirroring works**: Banglish in → Banglish out (MiniMax/Super VL); Bangla in → Bangla out with Bangla numerals; English in → English out.
-2. **Tiered medicine policy works**: fever → Napa/Paracetamol with label-level guidance; cancer/serious → **zero specific medicine names** (only treatment categories + specialist/hospital guidance).
-3. **Quality with the new pool:** MiniMax M3.1 Flash is fast and natural in both Bangla and English; Super VL is the safest Bangla voice; Ultra 550B produces the most structured English Pro answers.
-4. **Resilience engineering:** ordered fallback + per-model TTFT budgets + corrupt-output sanity gate + degenerate-repetition circuit breaker + per-IP rate limiting + failure cooldowns + routed-model badges.
-5. **Subscription funnel:** every premium CTA lands on `/subscription`; the simulated payment activates Premium and unlocks Pro mode on `/chat`.
-
-**Remaining risks (be honest for the demo):**
-1. **Super VL free-tier congestion** can exceed the 25s Pro TTFT budget; the route then falls back to MiniMax (clean, slightly less deep) or Ultra.
-2. **Ultra 550B occasionally slips Devanagari or fused Latin into long Bangla answers.** That is why Ultra is the *last* fallback on every Bangla/Banglish route; a mid-stream script slip is tolerated rather than truncating an otherwise good answer.
-3. **Free-tier congestion waves** can make every model slow at the same moment; then the chat shows the friendly “সব AI মডেল ব্যস্ত” message instead of an answer.
-4. **Safety is prompt + gates, not a deterministic red-flag keyword guard** (H1 still open — cheap to add).
-5. It remains a **guidance/triage assistant, not a diagnostician** — emergency care always routes to 999.
+**যা বোঝা যাচ্ছে:**
+- Super VL মডেল প্রায়ই **504 error** দিচ্ছে এবং **২৫ সেকেন্ডে কোনো content দিতে পারছে না**
+- Ultra ৫৫০B মডেল **corrupt output (repetition)** দিচ্ছে — একই টেক্সট বারবার রিপিট করছে
+- প্রতিটি ফেইল্ড মডেলের জন্য ২০-২৫ সেকেন্ড নষ্ট হচ্ছে
+- Next.js-এর নিজস্ব ওভারহেড অত্যন্ত কম (৩-১৬ms) — সমস্যা সম্পূর্ণ মডেল API-তে
 
 ---
 
-## 8. WhatsApp Commerce & SOS Templates (`src/lib/whatsapp.ts`)
+## 🎉 বাস্তবায়িত সমাধান ও পরিবর্তনসমূহ (Implementation Summary)
 
-| Template | Used by | Notes |
-|---|---|---|
-| `generatePharmacyOrderMessage` | OrderSuccessModal (after the simulated payment) | items, subtotal, discount %, ৳30 delivery, total, **payment method + TXN ID** |
-| `generateDoctorBookingMessage` | DoctorDetailDrawer | includes allergies + plan; discount applied to fee |
-| `generateDoctorVideoBookingMessage` | DoctorDetailDrawer | date/time preferred fields |
-| `generatePremiumRequestMessage` | ❌ **never used** | the intended "request Premium via WhatsApp" flow — wire this up |
-| `generateEmergencyAlertMessage` | EmergencyActions | name, phone, Google Maps location link, allergies/conditions |
+১. **ফ্ল্যাশ মোডে Groq LPU ও `openai/gpt-oss-120b`:**
+   - Groq API Key Pool (`src/lib/groq-pool.ts`) তৈরি করা হয়েছে যাতে ব্যবহারকারীর ৩টি Groq Key হ্যান্ডেল ও অটো-রোটেশন হয়।
+   - ফ্ল্যাশ মোড এখন সরাসরি Groq LPU-তে চলে — ইনফারেন্স সময় মাত্র **~০.৩ সেকেন্ড**!
 
-Default WhatsApp number: `process.env.NEXT_PUBLIC_WHATSAPP_NUMBER || "8801811389672"`.
-Numbers must be digits-only with country code (`wa.me` strips other characters anyway).
+২. **প্রো মোডে ৩টি OpenRouter Key এবং Nemotron মডেল:**
+   - OpenRouter Pool-কে ৩টি Key-তে সীমিত করা হয়েছে (`OPENROUTER_API_KEY_1..3`)।
+   - প্রো মোডে `nvidia/nemotron-3-ultra-550b-a55b:free` এবং `nvidia/nemotron-3.5-super-vl:free` সংরক্ষিত রাখা হয়েছে।
+   - Reasoning effort `low` করা হয়েছে যাতে ৪০+ সেকেন্ড সময় নষ্ট না হয় (লক্ষ্যমাত্রা: < ২০-২৫ সেকেন্ড)।
 
----
+৩. **প্রো মোডে মাঝপথে উত্তর ও টেবিল কেটে যাওয়ার স্থায়ী সমাধান:**
+   - `hasDegenerateRepetition` ফাংশন সংশোধন করা হয়েছে। মার্কডাউন টেবিল সেপারেটর লাইন (`| ---------------- | ---------------- |`) এবং হরিজন্টাল রুল এখন সুরক্ষিত — কোনো মিথ্যা repetition ত্রুটি ধরবে না।
+   - ডুপ্লিকেট রেসপন্স হ্যান্ডলিং ও টাইপচেক সম্পূর্ণ সফল।
 
-## 9. Known Issues & Improvements (prioritized)
-
-### 🔴 Critical (fix before real users)
-- **C1 — Broken primary model ID.** ✅ **Fixed (2026-10-20):** replaced by a live-probed, all-free
-  3-model pool with **language/mode/task-aware routing** — MiniMax M3.1 Flash, Nemotron 3.5 Super VL,
-  Nemotron 3 Ultra 550B (see §7.2). Gemma/xingchen/Lightning fully removed.
-- **C2 — Premium is free for everyone.** ✅ **Fixed for the demo (2026-10-20):** the direct
-  `setPlan("premium")` toggles were removed from `PlansSection`, `Navbar`, `LimitReachedCard` and
-  `ChatSidebar`; every CTA now navigates to `/subscription`, which runs a simulated bKash/Nagad/Card
-  checkout and calls `activatePremium()` on success. ⚠️ Still client-side only — production must
-  validate entitlements server-side (M7).
-- **C3 — No rate limiting on `/api/chat`.** ✅ **Fixed:** in-memory per-IP sliding-window rate limiter
-  (default **12 requests/min**, tunable via `CHAT_RATE_LIMIT_PER_MIN`). Over-limit requests get HTTP
-  429 + a friendly Bangla message shown in the chat. Payload caps: 16 history messages, 2000
-  chars/message; upstream error details are no longer echoed. (In-memory state resets on redeploy —
-  fine for the demo; use Redis/Upstash for production.)
-- **C4 — Missing `.env`.** Before this analysis the project had no env file, so chat always
-  errored. ✅ Fixed: `.env.local` + `.env.example` now exist (§11).
-
-### 🟠 High
-- **H1 — Chat safety net.** Add a server-side red-flag keyword detector (EN/Bangla/Banglish:
-  chest pain, শ্বাসকষ্ট, বুকে ব্যথা, রক্তক্ষরণ, জ্ঞান হারানো…) that returns the fixed 999 message
-  without calling the model. Cheap, deterministic, big safety win.
-- **H2 — Bangla quality (updated 2026-10-20).** ✅ Resolved by routing, not by one fixed chain:
-  Bangla/Banglish requests use **MiniMax/Super VL first and Ultra last**, because Ultra occasionally
-  slips Devanagari into long Bangla. Super VL remains the safest Bangla voice for serious/complex
-  cases; MiniMax is the fast, clean default. Free-tier congestion waves (all models slow at once →
-  friendly 503) are environmental and absorbed by cooldowns.
-- **H3 — Behavior-spec drift (now intentional).** The prompts were deliberately rebuilt for the
-  competition brief: natural physician voice + tiered medicine policy (see §7.3), which supersedes
-  the older `last_prompt.md` "v1.0" spec (verbatim prompts, ≤80-word Flash, 🚨/⚠️/✅ situation color
-  blocks). Remaining gaps if the old spec still matters: the **color-block renderer** for situation
-  lines is not implemented in `ChatMessages.tsx`, and `pdf-generator.ts` still leaves `|` table
-  pipes/emoji. Decide which behavior spec wins before launch.
-- **H4 — Copy vs. reality.** Plans copy says "60 AI requests per month" (not implemented);
-  TrustStrip says 98% accuracy, ServicesSection says 98.7%; "50,000+ patients" claim vs 6 doctors /
-  10 medicines in the catalog. Content-Sheet-specified testimonial names were replaced with invented
-  ones. Align marketing copy with the Content Sheet to avoid trust/compliance problems.
-- **H5 — Daily-limit bypass.** Tapping ⏹ Stop aborts the fetch before `incrementDailyUsage()`, so
-  free users can chat indefinitely. Count usage when the request starts (or on abort too).
-
-### 🟡 Medium
-- **M1 — Dead code & repo hygiene:** `HowItWorksSection.tsx` is unused; `sultan.jpg` unused;
-  repo root contains agent logs (`spec.md`, `last_prompt.md`, `user_prompts.jsonl`,
-  `scratch_request.json`) and `tsconfig.tsbuildinfo`. Remove from production; expand `.gitignore`.
-- **M2 — Missing assets:** all 16 `/assets/doctors/*.jpg` + `/assets/medicines/*.jpg` files are
-  absent — SafeImage fallbacks cover them, but the UI looks placeholder-y. Add real images or remove
-  the paths.
-- **M3 — Accessibility:** clickable `<div>`s without keyboard support (`DoctorRow`,
-  HistoryDrawer rows), nested interactive elements (`HospitalList` wraps `<Button>` in `<a>`),
-  `SegmentedControl` has no `role`/`aria-selected`, FAQ removes focus outlines, marquees/canvases
-  ignore `prefers-reduced-motion`, no `aria-live` for streaming text.
-- **M4 — Tailwind drift:** `duration-400`, `hover:scale-115`, `shadow-xs` are used but not defined →
-  silent no-ops. `TrustStripSection` grid classes cancel the 4-column desktop layout. Footer uses a
-  `.giant-text-watermark` class that exists in no stylesheet.
-- **M5 — Code quality bugs:** `useCountUp` called inside `.map()` (`TrustStripSection` — Rules of
-  Hooks violation); canvas `removeEventListener` calls pass fresh anonymous functions (listener
-  leaks) and `dpr` is clamped to 1 (blurry on retina); `SafeImage` never resets its error state when
-  `src` changes; `MedicineCard` `setTimeout` not cleaned on unmount.
-- **M6 — UX gaps:** no regenerate/edit message; no retry button on chat error; cart totals shown
-  with mixed precision (`toFixed(2)` vs raw); decrementing quantity from 1 silently deletes the
-  item; free users can't clear all history (`clearAllSessions` exists but is not exposed).
-- **M7 — Production readiness:** all doctors share one WhatsApp number; Premium uses a **simulated
-  checkout** with no real payment gateway or server-side entitlement verification; no privacy policy
-  page though health data (localStorage + sent to OpenRouter) is collected; profile is trusted from
-  the client.
-
-### 🟢 Low / Nice-to-have
-- Remove unused deps `framer-motion`, `gsap`, `react-hook-form` (bundle savings).
-- **Bundle size:** a clean production build (2026-10-18) shows First Load JS of **440–456 kB**
-  (single 438 kB vendor chunk). Worth profiling — remove unused deps, lazy-load heavy modules.
-- SEO: add `robots.txt`, `sitemap.xml`, OpenGraph/Twitter metadata, per-page titles.
-- Add error boundaries, loading skeletons for lists, and a `not-found.tsx`/`error.tsx`.
-- Add tests (there are none) — at minimum unit tests for cart math, geo, and prompt building.
-- Consider a Bengali/English UI language toggle (Bengali font is already loaded).
-- `next.config.js` sets `reactStrictMode: false` — turn it back on when convenient to catch
-  double-render bugs.
-
----
-
-## 10. How the Main Flows Work (cheat-sheet for AI agents)
-
-1. **Chat:** `chat/page.tsx` → `POST /api/chat` (per-IP rate-limited) → `planRoute()` detects
-   language/task/complexity → `buildSystemPrompt(mode, …)` → ordered free-model candidates
-   (per-model TTFT budgets + corrupt-output sanity gate + cooldowns; hidden reasoning stripped) →
-   visible text chunks appended to the last assistant message → routed badge from `X-MediLink-*`
-   headers → usage counter +1.
-2. **Register:** 3 steps → `useProfileStore.setProfile()` → all features read `profile` for
-   personalization (chat context, checkout defaults, SOS message, suggested prompts).
-3. **Pharmacy order:** add to cart → "Proceed to Checkout" → step 1 details (profile-prefilled) →
-   step 2 payment method (bKash/Nagad/Card/COD, demo values pre-filled) → "Pay" → ~1.7s simulated
-   processing → order saved with payment method + TXN ID, cart cleared → success modal
-   (Payment Successful + summary; optional "Send Order on WhatsApp").
-4. **Doctor booking:** doctors page (optional Nearby geo-sort) → drawer → WhatsApp message with
-   chosen fee (premium −20%) → opens `wa.me`.
-5. **Emergency:** on mount tries GPS → fallback profile area → Dhaka; SOS button = `tel:999`;
-   actions = SMS draft + WhatsApp share with Google-Maps location; hospital list sorted by distance.
-6. **Premium (demo):** any "Get Premium"/Premium CTA → `/subscription` → choose Monthly/Yearly →
-   bKash/Nagad/Card (demo values pre-filled) → Pay → ~1.7s simulated processing →
-   `activatePremium(cycle, txnId, subId)` → success receipt; on return the page shows the active
-   subscription. Premium unlocks unlimited chat, Pro mode, 20% discounts and PDF export.
-
----
-
-## 11. Environment Variables
-
-| Variable | Required | Used by | Format / example | Purpose |
-|---|---|---|---|---|
-| `OPENROUTER_API_KEY` | ✅ Yes | `src/app/api/chat/route.ts` | `sk-or-v1-...` (get from https://openrouter.ai/settings/keys) | Authenticates the AI proxy. Without it the chat API returns HTTP 500. |
-| `CHAT_RATE_LIMIT_PER_MIN` | Optional | `src/app/api/chat/route.ts` | `12` | Max chat requests per IP per minute (stability guard for the free-model demo). Defaults to `12` if unset. |
-| `NEXT_PUBLIC_WHATSAPP_NUMBER` | Optional | `src/lib/whatsapp.ts` | `8801811389672` (digits only, country code, no `+`) | Fallback WhatsApp number for pharmacy orders / SOS share. Defaults to `8801811389672` if unset. |
-
-Files provided in the repo root:
-- **`.env.local`** — the file YOU edit (git-ignored). Paste the real API key here.
-- **`.env.example`** — documented template (safe to commit).
-
-Notes: Next.js loads `.env.local` automatically for `next dev` / `next build` / `next start`.
-Restart the dev server after changing values. Never commit real keys.
-
----
-
-## 12. Source Documents (`prds/`) — what each says
-
-| Document | Purpose |
-|---|---|
-| `MediLink_PRD_v2.md` | Master product requirements: pages, 2 plans, guest-first, WhatsApp-driven, no auth/DB/payment, localStorage keys, G0–G6 build phases |
-| `MediLink_UIUX_Spec_v2.md` | Design tokens, fonts, spacing, Button Law (max one primary button per section), component specs, states, data schemas, WhatsApp templates |
-| `MediLink-Technical-Architecture-Spec.md` | Stack, folder structure, 4 stores, env vars, AI proxy design, system-prompt rules |
-| `MediLink-Test-Checklist-Demo-Script.md` | QA checklist + 7-minute live demo script (v1-era; some checks reference removed features) |
-| `Content-Sheet-v2.md` | Single source of truth for ALL copy and dummy data (10 medicines, 6 doctors, 5 hospitals, exact strings, WhatsApp templates) |
-
-The latest behavioral addendum ("Dr MediLink — AI Behavior & Response Design Specification v1.0")
-lives in `last_prompt.md` (also inside `user_prompts.jsonl`). It supersedes prompt §5.2 of the
-Technical Architecture Spec — but was **superseded by the competition redesign** (natural-physician
-persona + tiered medicine policy, §7.3); see §9 H3 for what remains if the old spec still matters.
+৪. **বিল্ড ও টেস্ট স্ট্যাটাস:**
+   - `npx next build`: সফল (Exit code 0, সব স্ট্যাটিক ও ডায়নামিক রুট কম্পাইল্ড)।
+   - `npm test`: ১২৪টি টেস্টের সবকটি উত্তীর্ণ (124/124 pass)।

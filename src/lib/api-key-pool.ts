@@ -119,8 +119,6 @@ export async function selectHealthyKey(): Promise<ApiKeyConfig | null> {
       process.env.OPENROUTER_API_KEY_1,
       process.env.OPENROUTER_API_KEY_2,
       process.env.OPENROUTER_API_KEY_3,
-      process.env.OPENROUTER_API_KEY_4,
-      process.env.OPENROUTER_API_KEY_5,
     ].filter(Boolean) as string[];
     await initializeKeyPool(envKeys);
   }
@@ -200,8 +198,6 @@ export async function getKeyPoolStatus(): Promise<Array<{
       process.env.OPENROUTER_API_KEY_1,
       process.env.OPENROUTER_API_KEY_2,
       process.env.OPENROUTER_API_KEY_3,
-      process.env.OPENROUTER_API_KEY_4,
-      process.env.OPENROUTER_API_KEY_5,
     ].filter(Boolean) as string[];
     await initializeKeyPool(envKeys);
   }

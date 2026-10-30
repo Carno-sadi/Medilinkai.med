@@ -7,7 +7,14 @@ import {
   RoutePlan,
 } from "@/lib/model-router";
 import { Profile } from "@/types";
-import { selectHealthyKey, markKeySuccess, markKeyFailed, releaseKey } from "@/lib/api-key-pool";
+import { selectHealthyKey, markKeySuccess, markKeyFailed, releaseKey, ApiKeyConfig } from "@/lib/api-key-pool";
+import {
+  selectHealthyGroqKey,
+  markGroqKeySuccess,
+  markGroqKeyFailed,
+  releaseGroqKey,
+  GroqKeyConfig,
+} from "@/lib/groq-pool";
 import type { MemoryItem } from "@/types";
 
 export const runtime = "nodejs";
@@ -234,11 +241,11 @@ const CORRUPT_OUTPUT_SENTINEL = -2; // pseudo-status for a corrupt opening prefi
 const modelCooldownUntil = new Map<string, number>();
 
 function cooldownFor(status: number): number {
-  if (status === TTFT_TIMEOUT_SENTINEL) return 180_000; // slow/broken — 3 min rest
-  if (status === CORRUPT_OUTPUT_SENTINEL) return 60_000; // prompt-specific corruption
-  if (status === 429) return 90_000; // rate-limited upstream — short rest
+  if (status === TTFT_TIMEOUT_SENTINEL) return 30_000; // transient congestion — 30s rest
+  if (status === CORRUPT_OUTPUT_SENTINEL) return 30_000; // prompt-specific corruption — 30s rest
+  if (status === 429) return 30_000; // rate-limited upstream — 30s rest
   if (status >= 500) return 30_000; // provider hiccup
-  if (status >= 400) return 300_000; // auth/credit/config problem — longer rest
+  if (status >= 400) return 60_000; // auth/config problem — 60s rest
   return 30_000; // network error / timeout
 }
 
@@ -343,15 +350,27 @@ const ACCEPT_PREFIX_CHARS = 24; // flush the first chunk as soon as this is sane
 const MIN_FINISHED_PREFIX = 10; // accept a naturally-ended very short reply
 const STREAM_IDLE_TIMEOUT_MS = 25_000; // no content for 25s → close gracefully
 
-const REPETITION_REGEXES = [
-  new RegExp("(.)\\1{9,}", "su"), // single char × 10+
-  new RegExp("(.{2})\\1{7,}", "su"), // 2-char unit × 8+
-  new RegExp("(.{3})\\1{7,}", "su"), // 3-char unit × 8+
-  new RegExp("(.{4})\\1{7,}", "su"), // 4-char unit × 8+
-];
-
 function hasDegenerateRepetition(text: string): boolean {
-  return REPETITION_REGEXES.some((re) => re.test(text));
+  // Strip markdown table rows, dividers, horizontal rules, and formatting before repetition testing
+  // e.g. |---|---| or ------------------- or ====================
+  const cleaned = text
+    .replace(/^[|\s\-:=+*#_.]+$/gm, "")
+    .replace(/[|\-+:=*#_]{3,}/g, " ");
+
+  // Single character repeated 10+ times (ignoring markdown syntax and whitespace)
+  if (/([^\s\-_=*|.#:/\\[\]()\\])\1{9,}/u.test(cleaned)) return true;
+
+  // Multi-character repeating units (must contain letters or numbers so table syntax isn't flagged)
+  const multiCharUnits = [
+    new RegExp("(..)\\1{7,}", "su"),
+    new RegExp("(...)\\1{7,}", "su"),
+    new RegExp("(....)\\1{7,}", "su"),
+  ];
+  return multiCharUnits.some((re) => {
+    const match = cleaned.match(re);
+    if (!match) return false;
+    return /[\p{L}\p{N}]/u.test(match[1]);
+  });
 }
 
 const REASONING_LEAK_RE =
@@ -444,18 +463,6 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 3. Select healthy key with least in-flight load from the pool
-    const keyConfig = await selectHealthyKey();
-    if (!keyConfig) {
-      return NextResponse.json(
-        {
-          error:
-            "All API keys are exhausted or cooling down. Please try again in a moment.",
-        },
-        { status: 503, headers: mediLinkHeaders({}) }
-      );
-    }
-
     const {
       messages: rawMessages,
       model = "med1-flash",
@@ -503,18 +510,17 @@ export async function POST(req: NextRequest) {
       Array.isArray(memoryPrompts) ? memoryPrompts.filter((p): p is string => typeof p === "string").slice(0, 20) : null,
       Array.isArray(memories) ? memories.slice(0, 25) : null,
     );
-    const openRouterMessages = [
+    const chatMessages = [
       { role: "system", content: systemPrompt },
       ...messages,
     ];
 
-    let currentKeyConfig = keyConfig;
+    let currentOpenRouterKey: ApiKeyConfig | null = null;
+    let currentGroqKey: GroqKeyConfig | null = null;
 
     /* ── Sequential fallback across the routed candidates ──
-       A model counts as "failed to respond" when it errors, produces no
-       usable content before its TTFT budget, or starts with objectively
-       garbled output. Failed models get a short cooldown so later requests
-       stay fast while the router still respects language/mode/task order. */
+       Flash mode routes to Groq (openai/gpt-oss-120b) with sub-second latency.
+       Pro mode routes to OpenRouter (NVIDIA Nemotron 3 Ultra / 3.5 Super VL). */
     let activeReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
     let activeParser: ReturnType<typeof createSSEParser> | null = null;
     let activeDecoder: TextDecoder | null = null;
@@ -526,52 +532,87 @@ export async function POST(req: NextRequest) {
 
     for (const candidate of orderedCandidates(plan.candidates)) {
       modelsTried += 1;
+      const isGroq = candidate.provider === "groq";
+
+      if (isGroq) {
+        if (!currentGroqKey) {
+          currentGroqKey = await selectHealthyGroqKey();
+        }
+        if (!currentGroqKey) {
+          console.warn(`[MediLink] No healthy Groq key available for ${candidate.id}`);
+          continue;
+        }
+      } else {
+        if (!currentOpenRouterKey) {
+          currentOpenRouterKey = await selectHealthyKey();
+        }
+        if (!currentOpenRouterKey) {
+          console.warn(`[MediLink] No healthy OpenRouter key available for ${candidate.id}`);
+          continue;
+        }
+      }
 
       // Stage 1 — get response headers (bounded wait).
       const attemptController = new AbortController();
       const attemptTimeout = setTimeout(
         () => attemptController.abort(),
-        ATTEMPT_TIMEOUT_MS
+        isGroq ? Math.min(10_000, candidate.ttftBudgetMs) : ATTEMPT_TIMEOUT_MS
       );
 
-      // FIX 4 — the patient can vanish (Stop button, navigation, closed tab)
-      // while the upstream model is still generating. req.signal aborts on
-      // disconnect; combining it with the attempt controller makes the
-      // upstream fetch die with the client instead of burning tokens for
-      // nobody. The 20s header timeout above keeps working as before.
       const combined = combineSignals([attemptController.signal, req.signal]);
+
+      const fetchUrl = isGroq
+        ? "https://api.groq.com/openai/v1/chat/completions"
+        : "https://openrouter.ai/api/v1/chat/completions";
+
+      const apiKey = isGroq ? currentGroqKey?.key : currentOpenRouterKey?.key;
+      if (!apiKey) {
+        continue;
+      }
+
+      const fetchHeaders: Record<string, string> = {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      };
+      if (!isGroq) {
+        fetchHeaders["HTTP-Referer"] = "https://medilink.com.bd";
+        fetchHeaders["X-Title"] = "MediLink Bangladesh";
+      }
+
+      const fetchBody: Record<string, any> = {
+        model: candidate.id,
+        messages: chatMessages,
+        stream: true,
+        temperature: candidate.temperature,
+        max_tokens: candidate.maxTokens,
+      };
+      if (isGroq) {
+        // Groq reasoning effort "low" minimizes chain-of-thought tokens & latency
+        fetchBody.reasoning_effort = "low";
+      } else if (candidate.reasoningEffort) {
+        fetchBody.reasoning = { effort: candidate.reasoningEffort };
+      }
 
       let res: Response | null = null;
       try {
-        res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        res = await fetch(fetchUrl, {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${currentKeyConfig.key}`,
-            "HTTP-Referer": "https://medilink.com.bd",
-            "X-Title": "MediLink Bangladesh",
-          },
+          headers: fetchHeaders,
           signal: combined.signal,
-          body: JSON.stringify({
-            model: candidate.id,
-            messages: openRouterMessages,
-            stream: true,
-            temperature: candidate.temperature,
-            max_tokens: candidate.maxTokens,
-            // Unified OpenRouter param. Pro's 550B reasoner runs at "medium";
-            // Super VL always runs at "low" (medium consumes its whole budget).
-            reasoning: { effort: candidate.reasoningEffort },
-          }),
+          body: JSON.stringify(fetchBody),
         });
       } catch (err: any) {
         if (req.signal.aborted) {
-          // Not the model's fault — the client left. Do not cool it down.
           console.warn(
             `[MediLink] client disconnected while ${candidate.id} was answering`
           );
         } else {
           markModelFailed(candidate.id, 0);
-          await markKeyFailed(currentKeyConfig, 0);
+          if (isGroq && currentGroqKey) {
+            markGroqKeyFailed(currentGroqKey, 0);
+          } else if (!isGroq && currentOpenRouterKey) {
+            await markKeyFailed(currentOpenRouterKey, 0);
+          }
           console.warn(
             `[MediLink] ${candidate.id} network error/timeout:`,
             err?.message || err
@@ -583,40 +624,56 @@ export async function POST(req: NextRequest) {
 
       if (!res) {
         combined.dispose();
-        if (req.signal.aborted) break; // client gone — do not try more models
+        if (req.signal.aborted) break;
         continue;
       }
 
       if (!res.ok || !res.body) {
         const errText = await res.text().catch(() => "");
-        await markKeyFailed(currentKeyConfig, res.status);
-        // Seamless key rotation: if this key hit rate limits, rotate to next available key in the pool and retry
-        if (res.status === 429 || res.status === 402 || res.status === 401 || res.status === 403) {
-          const nextKey = await selectHealthyKey();
-          if (nextKey && nextKey.key !== currentKeyConfig.key) {
-            console.log(`[MediLink] Rotated key to ${nextKey.label} after status ${res.status}`);
-            currentKeyConfig = nextKey;
-            try {
-              res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-                method: "POST",
-                headers: {
-                  "Content-Type": "application/json",
-                  Authorization: `Bearer ${currentKeyConfig.key}`,
-                  "HTTP-Referer": "https://medilink.com.bd",
-                  "X-Title": "MediLink Bangladesh",
-                },
-                signal: combined.signal,
-                body: JSON.stringify({
-                  model: candidate.id,
-                  messages: openRouterMessages,
-                  stream: true,
-                  temperature: candidate.temperature,
-                  max_tokens: candidate.maxTokens,
-                  reasoning: { effort: candidate.reasoningEffort },
-                }),
-              });
-            } catch {
-              res = null;
+        if (isGroq && currentGroqKey) {
+          markGroqKeyFailed(currentGroqKey, res.status);
+          if (res.status === 429) {
+            const nextKey = await selectHealthyGroqKey();
+            if (nextKey && nextKey.key !== currentGroqKey.key) {
+              console.log(`[MediLink] Rotated Groq key to ${nextKey.label} after status ${res.status}`);
+              currentGroqKey = nextKey;
+              try {
+                res = await fetch(fetchUrl, {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/json",
+                    Authorization: `Bearer ${currentGroqKey.key}`,
+                  },
+                  signal: combined.signal,
+                  body: JSON.stringify(fetchBody),
+                });
+              } catch {
+                res = null;
+              }
+            }
+          }
+        } else if (!isGroq && currentOpenRouterKey) {
+          await markKeyFailed(currentOpenRouterKey, res.status);
+          if (res.status === 429 || res.status === 402 || res.status === 401 || res.status === 403) {
+            const nextKey = await selectHealthyKey();
+            if (nextKey && nextKey.key !== currentOpenRouterKey.key) {
+              console.log(`[MediLink] Rotated OpenRouter key to ${nextKey.label} after status ${res.status}`);
+              currentOpenRouterKey = nextKey;
+              try {
+                res = await fetch(fetchUrl, {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/json",
+                    Authorization: `Bearer ${currentOpenRouterKey.key}`,
+                    "HTTP-Referer": "https://medilink.com.bd",
+                    "X-Title": "MediLink Bangladesh",
+                  },
+                  signal: combined.signal,
+                  body: JSON.stringify(fetchBody),
+                });
+              } catch {
+                res = null;
+              }
             }
           }
         }
@@ -632,23 +689,13 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      // Stage 2 — buffer only the opening 72 visible characters. This is
-      // enough for every hard corruption check, but far too little to make
-      // Flash feel sluggish (the old 240-char gate added seconds of delay).
+      // Stage 2 — buffer opening characters to validate safety and prevent garbled outputs.
       const reader = res.body.getReader();
       const parser = createSSEParser();
       const decoder = new TextDecoder();
       const deadline = Date.now() + candidate.ttftBudgetMs;
       let garbledReason: string | null = null;
       let streamEnded = false;
-
-      // FIX 1 — the prefix buffer is per candidate. It used to live outside
-      // the loop, so a rejected model's corrupt text was carried into the
-      // next candidate: the next `while` never ran, "enough content" was
-      // already true, and the healthy model was accepted with zero sanity
-      // validation while the corrupt text was streamed to the patient as the
-      // opening of the answer. Each candidate is now validated on its own
-      // output only.
       let capturedPrefix = "";
 
       try {
@@ -686,41 +733,41 @@ export async function POST(req: NextRequest) {
       const shortButFinished =
         streamEnded && capturedPrefix.length >= MIN_FINISHED_PREFIX;
 
-      // FIX 4 — the client disconnected during the buffering window. Stop
-      // here instead of trying (and paying for) the remaining candidates.
       if (req.signal.aborted) {
-        reader.cancel().catch(() => {
-          /* already released */
-        });
+        reader.cancel().catch(() => {});
         combined.dispose();
         break;
       }
 
       if (!garbledReason && (enoughContent || shortButFinished)) {
         markModelHealthy(candidate.id);
-        await markKeySuccess(currentKeyConfig);
+        if (isGroq && currentGroqKey) {
+          markGroqKeySuccess(currentGroqKey);
+        } else if (!isGroq && currentOpenRouterKey) {
+          await markKeySuccess(currentOpenRouterKey);
+        }
         activeReader = reader;
         activeParser = parser;
         activeDecoder = decoder;
         activeCandidate = candidate;
-        // FIX 1 — only this candidate's own text may be streamed to the
-        // patient, so the accepted prefix is copied out of the loop scope.
         activePrefix = capturedPrefix;
         activeAttemptController = attemptController;
         disposeActiveSignals = combined.dispose;
         break;
       }
 
-      reader.cancel().catch(() => {
-        /* already released */
-      });
+      reader.cancel().catch(() => {});
       combined.dispose();
       markModelFailed(
         candidate.id,
         garbledReason ? CORRUPT_OUTPUT_SENTINEL : TTFT_TIMEOUT_SENTINEL
       );
       if (!garbledReason) {
-        await markKeyFailed(currentKeyConfig, 504);
+        if (isGroq && currentGroqKey) {
+          markGroqKeyFailed(currentGroqKey, 504);
+        } else if (!isGroq && currentOpenRouterKey) {
+          await markKeyFailed(currentOpenRouterKey, 504);
+        }
       }
       console.warn(
         `[MediLink] ${candidate.id} rejected (${
@@ -732,7 +779,8 @@ export async function POST(req: NextRequest) {
     }
 
     if (!activeReader || !activeParser || !activeDecoder || !activeCandidate) {
-      releaseKey(currentKeyConfig);
+      if (currentGroqKey) releaseGroqKey(currentGroqKey);
+      if (currentOpenRouterKey) releaseKey(currentOpenRouterKey);
       return NextResponse.json(
         { error: "সব AI মডেল এই মুহূর্তে ব্যস্ত। একটু পরে আবার চেষ্টা করুন।" },
         {
@@ -748,6 +796,7 @@ export async function POST(req: NextRequest) {
         }
       );
     }
+
 
     // Stage 3 — stream the rest of the answer to the client immediately.
     const encoder = new TextEncoder();
